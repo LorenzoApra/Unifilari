@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Unifilari ATS</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">U</span><span>Unifilari</span></div>
+      <div id="project-name" class="project-name">Nuovo progetto</div>
+      <div class="top-actions">
+        <button class="button quiet" id="save-project">Salva progetto</button>
+        <label class="button quiet">Apri progetto<input id="open-project" type="file" accept="application/json" hidden /></label>
+        <button class="button primary" id="print-project">Esporta PDF</button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <aside class="sidebar no-print">
+        <section>
+          <h2>Progetto</h2>
+          <label>Nome Evento<input id="event-name" placeholder="Nome Evento" /></label>
+          <label>Luogo<input id="event-location" placeholder="Luogo" /></label>
+          <label>Tipologia<input id="event-type" value="Allestimento Luci" /></label>
+          <label>Versione<input id="event-version" value="1.0" /></label>
+          <button type="button" class="button" id="edit-company">Modifica ditta esecutrice</button>
+        </section>
+
+        <section>
+          <h2>Importa dati</h2>
+          <label class="drop-target">CSV da Capture<input id="capture-file" type="file" accept=".csv,text/csv" hidden /><span>Fixture, Wattage, Circuit</span></label>
+          <p class="help">I circuiti vengono raggruppati e l'assorbimento viene sommato.</p>
+          <p class="help">La libreria quadri è standard e gestita nella configurazione dell'app.</p>
+        </section>
+
+        <section>
+          <h2>Aggiungi</h2>
+          <div class="button-grid">
+            <button id="add-supply">Fornitura</button>
+            <button id="add-panel">Quadro</button>
+            <button id="add-temp-panel">Quadro temporaneo</button>
+            <button id="group-socapex">Raggruppa Socapex</button>
+            <button id="add-load">Utenza</button>
+            <button id="add-link">Collegamento</button>
+            <button id="connect-selected">Collega selezionati</button>
+            <button id="arrange-selected">Ordina selezionati</button>
+          </div>
+        </section>
+
+        <section>
+          <h2>Catalogo linee</h2>
+          <div id="cable-catalog" class="catalog"></div>
+        </section>
+
+        <section class="legend">
+          <h2>Uso rapido</h2>
+          <p>Seleziona un elemento nel disegno per modificarlo. Trascina i blocchi per correggere il layout automatico.</p>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <div class="workspace-toolbar no-print">
+          <div><strong id="page-label">Pagina 1</strong><span id="page-summary"></span><span id="status-message" role="status"></span></div>
+          <div class="page-buttons"><button id="previous-page">←</button><button id="next-page">→</button><button id="new-page">+ Pagina</button></div>
+        </div>
+        <div id="sheet-wrapper">
+          <article id="drawing-sheet" class="drawing-sheet">
+            <div class="drawing-title">Schema unifilare di distribuzione elettrica</div>
+            <svg id="diagram" viewBox="0 0 1200 780" aria-label="Schema unifilare"></svg>
+            <footer class="title-block">
+              <div><small>Ditta esecutrice</small><strong id="block-company">ATS Srl</strong><span id="block-company-address">Via Vittorio Emanuele III<br />12036 Revello CN</span><span id="block-company-vat"></span></div>
+              <div><small>Descrizione</small><strong id="block-type">Allestimento Luci</strong></div>
+              <div><small>Evento</small><strong id="block-event">Nuovo progetto</strong></div>
+              <div><small>Luogo</small><strong id="block-location">—</strong></div>
+              <div><small>Versione</small><strong id="block-version">1.0</strong><small id="block-page">Pagina 1 di 1</small></div>
+            </footer>
+          </article>
+        </div>
+      </section>
+
+      <aside class="inspector no-print" id="inspector">
+        <div class="inspector-heading"><h2>Proprietà</h2><button id="delete-selected" title="Elimina elemento">Elimina</button></div>
+        <p class="empty-state">Seleziona un elemento dello schema.</p>
+        <form id="property-form" hidden></form>
+      </aside>
+    </main>
+
+    <dialog id="link-dialog">
+      <form method="dialog" id="link-form">
+        <h2>Nuovo collegamento</h2>
+        <label>Da<select id="link-from"></select></label>
+        <label>A<select id="link-to"></select></label>
+        <label>Linea<select id="link-cable"></select></label>
+        <label>Lunghezza (m)<input id="link-length" type="number" min="0" step="0.5" value="2.5" /></label>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-link" value="default">Crea</button></menu>
+      </form>
+    </dialog>
+    <dialog id="panel-dialog">
+      <form method="dialog">
+        <h2>Scegli quadro dal database</h2>
+        <label>Tipo quadro<select id="panel-type"></select></label>
+        <label>Matricola<select id="panel-choice"></select></label>
+        <label id="panel-mode-row" hidden>Uscite<select id="panel-mode"></select></label>
+        <p class="help" id="panel-choice-details"></p>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-panel" value="default">Aggiungi quadro</button></menu>
+      </form>
+    </dialog>
+    <dialog id="temporary-panel-dialog">
+      <form method="dialog">
+        <h2>Quadro temporaneo</h2>
+        <label>Nome quadro<input id="temporary-panel-name" value="Quadro temporaneo" /></label>
+        <label>Matricola / nota<input id="temporary-panel-code" placeholder="Es. Quadro aggiuntivo" /></label>
+        <label>Ingresso<select id="temporary-panel-input"></select></label>
+        <div id="temporary-panel-ports"></div>
+        <button type="button" id="add-temporary-port">+ Aggiungi uscita</button>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-temporary-panel" value="default">Aggiungi quadro</button></menu>
+      </form>
+    </dialog>
+    <dialog id="welcome-dialog">
+      <form method="dialog">
+        <h2>Nuovo schema unifilare</h2>
+        <p class="help">Il progetto è vuoto. Scegli come iniziare.</p>
+        <div class="welcome-actions">
+          <button type="button" id="welcome-add-supply">Crea una fornitura</button>
+          <label class="button primary">Importa circuiti Capture<input id="welcome-capture-file" type="file" accept=".csv,text/csv" hidden /></label>
+        </div>
+        <menu><button value="cancel">Inizia vuoto</button></menu>
+      </form>
+    </dialog>
+    <dialog id="capture-import-dialog">
+      <form method="dialog">
+        <h2>Importa circuiti da Capture</h2>
+        <label>Collega i circuiti selezionati a<select id="capture-parent"></select></label>
+        <p class="help">Puoi scegliere un quadro già presente, oppure importare senza collegare.</p>
+        <div class="bulk-selection-actions"><button type="button" id="capture-select-all">Seleziona tutte</button><button type="button" id="capture-select-none">Nessuna</button></div>
+        <div id="capture-prefix-actions" class="bulk-selection-actions"></div>
+        <div id="capture-circuit-list" class="capture-circuit-list"></div>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-capture-import" value="default">Importa selezionati</button></menu>
+      </form>
+    </dialog>
+    <dialog id="socapex-dialog">
+      <form method="dialog">
+        <h2>Raggruppa utenze su Socapex</h2>
+        <label>Quadro di partenza<select id="socapex-parent"></select></label>
+        <p class="help">Seleziona da 1 a 6 utenze CEE 16 A monofase: verranno rappresentate con un unico cavo Socapex, senza blocco intermedio.</p>
+        <div class="bulk-selection-actions"><button type="button" id="socapex-select-all">Seleziona tutte</button><button type="button" id="socapex-select-none">Nessuna</button></div>
+        <div id="socapex-prefix-actions" class="bulk-selection-actions"></div>
+        <div id="socapex-load-list" class="capture-circuit-list"></div>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-socapex" value="default">Crea raggruppamento</button></menu>
+      </form>
+    </dialog>
+    <dialog id="bulk-connect-dialog">
+      <form method="dialog">
+        <h2>Collega utenze selezionate</h2>
+        <label>Quadro / fornitura di partenza<select id="bulk-connect-parent"></select></label>
+        <p class="help">Le linee vengono impostate automaticamente in base alla spina dell’utenza e alla disponibilità del quadro.</p>
+        <div class="bulk-selection-actions"><button type="button" id="bulk-connect-select-all">Seleziona tutte</button><button type="button" id="bulk-connect-select-none">Nessuna</button></div>
+        <div id="bulk-connect-load-list" class="capture-circuit-list"></div>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-bulk-connect" value="default">Collega utenze</button></menu>
+      </form>
+    </dialog>
+    <dialog id="arrange-dialog">
+      <form method="dialog">
+        <h2>Ordina elementi selezionati</h2>
+        <label>Disposizione<select id="arrange-mode"><option value="center">Centra nella pagina</option><option value="relative">Disponi rispetto a un elemento</option></select></label>
+        <label id="arrange-reference-row" hidden>Elemento di riferimento<select id="arrange-reference"></select></label>
+        <p class="help">Gli elementi vengono disposti in una griglia ordinata senza sovrapposizioni.</p>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-arrange" value="default">Ordina</button></menu>
+      </form>
+    </dialog>
+    <dialog id="company-dialog">
+      <form method="dialog">
+        <h2>Ditta esecutrice</h2>
+        <label>Denominazione<input id="company-name" /></label>
+        <label>Indirizzo<textarea id="company-address" rows="3" placeholder="Via, numero civico&#10;CAP Città Provincia"></textarea></label>
+        <label>P. IVA<input id="company-vat" /></label>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-company" value="default">Salva</button></menu>
+      </form>
+    </dialog>
+    <script src="app.js"></script>
+  </body>
+</html>

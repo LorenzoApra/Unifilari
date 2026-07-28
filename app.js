@@ -1,0 +1,340 @@
+const CABLES = [
+  { id: 'cee16mono', name: 'CEE 16 A monofase', plug: 'CEE P+N+T 230 V 16 A', cable: 'H07RN-F 3G2,5 mm²' },
+  { id: 'cee16tri', name: 'CEE 16 A trifase', plug: 'CEE 3P+N+T 400 V 16 A', cable: 'H07RN-F 5G2,5 mm²' },
+  { id: 'cee32mono', name: 'CEE 32 A monofase', plug: 'CEE P+N+T 230 V 32 A', cable: 'H07RN-F 3G6 mm²' },
+  { id: 'cee32tri', name: 'CEE 32 A trifase', plug: 'CEE 3P+N+T 400 V 32 A', cable: 'H07RN-F 5G6 mm²' },
+  { id: 'cee63tri', name: 'CEE 63 A trifase', plug: 'CEE 3P+N+T 400 V 63 A', cable: 'H07RN-F 5G16 mm²' },
+  { id: 'cee125tri', name: 'CEE 125 A trifase', plug: 'CEE 3P+N+T 400 V 125 A', cable: 'H07RN-F 5G35 mm²' },
+  { id: 'powerlock', name: 'PowerLock', plug: 'PowerLock trifase', cable: 'Cavo sezione 95 mm²' },
+  { id: 'socapex', name: 'Socapex', plug: 'Socapex', cable: 'Titanex 19G2,5 mm²' },
+];
+// Libreria standard derivata da Quadri.xlsx: viene gestita nel codice dell'app, non nell'interfaccia utente.
+const portList = (...items) => items.map(([type, quantity]) => ({ type, quantity }));
+const panelModels = (prefix, numbers, inputType, ports, alternatives = []) => numbers.map((number) => ({ matricola: `${prefix}#${number}`, inputType, ports, alternatives }));
+const PANEL_LIBRARY = [
+  ...panelModels('PB250A', [1], 'powerlock', portList(['cee16mono', 1], ['cee32tri', 1], ['cee63tri', 6])),
+  ...panelModels('PB125A', [1], 'cee125tri', portList(['cee16mono', 3], ['cee32tri', 2], ['cee63tri', 3])),
+  ...panelModels('PB125A', [2], 'cee125tri', portList(['cee16mono', 3], ['cee32tri', 3], ['cee63tri', 2])),
+  ...panelModels('PB125A', [3], 'cee125tri', portList(['cee16mono', 4], ['cee16tri', 1], ['cee32tri', 4], ['cee63tri', 2])),
+  ...panelModels('PB63A', Array.from({ length: 18 }, (_, index) => index + 1), 'cee63tri', portList(['cee16mono', 12], ['cee32mono', 3])),
+  ...panelModels('PB63A', [19, 20, 21, 22, 28], 'cee63tri', portList(['cee16mono', 9], ['cee32mono', 3], ['cee32tri', 2], ['cee63tri', 1])),
+  ...panelModels('PB63A', [23], 'cee63tri', portList(['cee16mono', 6], ['cee32mono', 3], ['cee32tri', 3], ['cee63tri', 1])),
+  ...panelModels('PB63A', [25], 'cee63tri', portList(['cee16mono', 6], ['cee32tri', 2])),
+  ...panelModels('PB63A', [26], 'cee63tri', portList(['cee16mono', 24])),
+  ...panelModels('PB63A', [27], 'cee63tri', portList(['cee16mono', 6], ['cee32mono', 3], ['cee32tri', 1])),
+  ...panelModels('PB63A', [29], 'cee63tri', portList(['cee16mono', 3], ['cee32mono', 3], ['cee32tri', 3])),
+  ...panelModels('PB32AT', [1, 2], 'cee32tri', portList(['cee16mono', 6], ['cee32mono', 3], ['cee32tri', 1])),
+  ...panelModels('PB32AT', [3], 'cee32tri', portList(['cee32mono', 3])),
+  ...panelModels('PB32AT', [4], 'cee32tri', portList(['cee16mono', 6], ['cee32mono', 1], ['cee32tri', 1])),
+  ...panelModels('PB32AT', [5, 6, 7, 8, 9, 11, 12, 13], 'cee32tri', portList(['cee16mono', 6])),
+  ...panelModels('PB32AM', [1, 2, 3, 4, 5, 6, 7, 8, 9], 'cee32mono', portList(['cee16mono', 6])),
+];
+const $ = (selector) => document.querySelector(selector);
+const uid = () => crypto.randomUUID();
+const NODE_HALF = 100;
+let state = { version: 4, meta: { name: '', location: '', type: 'Allestimento Luci', revision: '1.0', company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '' }, pages: [1], currentPage: 1, selected: null, selectedIds: [], selectedLink: null, library: PANEL_LIBRARY, nodes: [], links: [] };
+let temporaryPorts = [{ type: 'cee16mono', quantity: 1 }];
+let pendingCaptureGroups = [];
+
+function demoProject() {
+  const supply = { id: uid(), type: 'supply', page: 1, x: 75, y: 135, title: 'Fornitura', subtitle: CABLES[4].plug, supplyType: 'cee125tri', details: '' };
+  const panel = { id: uid(), type: 'panel', page: 1, x: 270, y: 310, title: 'Quadro #1', subtitle: 'Quadro Generale', details: 'PB125A#01', panelModel: 'PB125A#01', inputType: 'cee125tri', ports: PANEL_LIBRARY[1].ports.map((port) => ({ ...port })), socket: '' };
+  const load = { id: uid(), type: 'load', page: 1, x: 825, y: 295, title: 'Utenza di esempio', subtitle: CABLES[0].plug, plugType: 'cee16mono', details: 'Assorbimento 2,5 kW', socket: 'P1', watts: 2500 };
+  state.nodes = [supply, panel, load];
+  state.links = [{ id: uid(), from: supply.id, to: panel.id, cable: 'cee125tri', length: 20 }, { id: uid(), from: panel.id, to: load.id, cable: 'cee16mono', length: 20 }];
+}
+function nodeById(id) { return state.nodes.find((node) => node.id === id); }
+function linkById(id) { return state.links.find((link) => link.id === id); }
+function selectedNodes() { return state.nodes.filter((node) => state.selectedIds.includes(node.id)); }
+function selectNode(id, additive = false) {
+  if (additive) state.selectedIds = state.selectedIds.includes(id) ? state.selectedIds.filter((item) => item !== id) : [...state.selectedIds, id];
+  else state.selectedIds = [id];
+  state.selected = state.selectedIds.includes(id) ? id : state.selectedIds.at(-1) || null; state.selectedLink = null;
+}
+function pageNodes() { return state.nodes.filter((node) => node.page === state.currentPage); }
+function pagesCount() { return Math.max(1, ...(state.pages || [1])); }
+function cableById(id) { return CABLES.find((cable) => cable.id === id) || CABLES[0]; }
+function esc(value) { return String(value || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char])); }
+function wrapText(value, maxLength) {
+  const words = String(value || '').split(/\s+/); const lines = []; let line = '';
+  words.forEach((word) => { const next = line ? `${line} ${word}` : word; if (line && next.length > maxLength) { lines.push(line); line = word; } else line = next; });
+  if (line) lines.push(line); return lines;
+}
+function textLines(node) {
+  if (node.type === 'load') return [`${node.title}${node.socket ? ` - Presa ${node.socket}` : ''}`, node.subtitle, node.details].filter(Boolean).flatMap((line) => wrapText(line, 32));
+  return [node.title, node.socket ? `Presa ${node.socket}` : node.subtitle, node.socket ? node.subtitle : node.details, node.socket ? node.details : ''].filter(Boolean).flatMap((line) => wrapText(line, 23));
+}
+function directCableSiblings(link) { return state.links.filter((item) => !item.socapexGroup && item.from === link.from && item.cable === link.cable && nodeById(item.to)?.page === state.currentPage).sort((first, second) => (nodeById(first.to)?.y || 0) - (nodeById(second.to)?.y || 0)); }
+function linkLabel(link) { const cable = cableById(link.cable), quantity = link.socapexGroup ? 1 : directCableSiblings(link).length; return [`Collegamento tramite presa${quantity > 1 ? ` (${quantity} linee)` : ''}`, cable.plug, `Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri circa`]; }
+function linkLabelPosition(link, from, to) {
+  const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = Math.round((startX + endX) / 2), lines = linkLabel(link).flatMap((line) => wrapText(line, 29));
+  return { x: link.labelX ?? Math.min(midX + 16, 790), y: link.labelY ?? Math.max(22, Math.min(from.y, to.y) - lines.length * 19 - 7), lines };
+}
+function linkLaneX(link, from) {
+  const siblings = state.links.filter((item) => !item.socapexGroup && item.from === from.id && nodeById(item.to)?.page === state.currentPage).sort((first, second) => (nodeById(first.to)?.y || 0) - (nodeById(second.to)?.y || 0));
+  if (siblings.length < 2) return Math.round((from.x + NODE_HALF + (nodeById(link.to)?.x || 0) - NODE_HALF) / 2);
+  const index = siblings.findIndex((item) => item.id === link.id), startX = from.x + NODE_HALF, closestTargetX = Math.min(...siblings.map((item) => (nodeById(item.to)?.x || 0) - NODE_HALF));
+  return Math.round(startX + 28 + ((index + 1) * Math.max(24, closestTargetX - startX - 56)) / (siblings.length + 1));
+}
+function nodeOptions(selected) { return pageNodes().map((node) => `<option value="${node.id}" ${node.id === selected ? 'selected' : ''}>${esc(node.title)}${node.socket ? ` (${node.socket})` : ''}</option>`).join(''); }
+function cableOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex').map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
+function plugOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex').map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
+function requiredPlug(node) { return node.type === 'load' ? node.plugType : node.type === 'panel' ? node.inputType : null; }
+function connectionCost() { return 1; }
+function compatibilityWarning(from, to, ignoredLink = null) {
+  if (from.type === 'load') return 'Collegamento bloccato: un’utenza non può alimentare o collegare un’altra utenza.';
+  if (to.type === 'load' && state.links.some((link) => link.id !== ignoredLink && link.to === to.id)) return `Collegamento bloccato: l’utenza ${to.title} è già collegata a un quadro.`;
+  const required = requiredPlug(to);
+  if (from.type === 'supply' && to.type === 'panel' && from.supplyType !== to.inputType) return `Collegamento bloccato: la fornitura ${cableById(from.supplyType).name} non è compatibile con l'ingresso ${cableById(to.inputType).name} del quadro.`;
+  if (from.type === 'panel' && required) {
+    const capacity = (from.ports || []).filter((port) => port.type === required).reduce((sum, port) => sum + port.quantity, 0);
+    const used = state.links.filter((link) => link.id !== ignoredLink && link.from === from.id && requiredPlug(nodeById(link.to)) === required).reduce((sum, link) => sum + connectionCost(nodeById(link.to)), 0);
+    if (!capacity) return `Collegamento bloccato: ${from.title} non ha uscite ${cableById(required).name}.`;
+    if (used >= capacity) return `Collegamento bloccato: le prese ${cableById(required).name} del quadro ${from.title} sono finite (${used}/${capacity}).`;
+  }
+  return '';
+}
+function showStatus(message = '') { $('#status-message').textContent = message; }
+function tryAddLink(fromId, toId, cable, length) {
+  const from = nodeById(fromId), to = nodeById(toId); if (!from || !to || fromId === toId) return false;
+  const warning = compatibilityWarning(from, to); if (warning) { showStatus(warning); return false; }
+  const lineCable = cable || requiredPlug(to) || 'cee16mono';
+  state.links.push({ id: uid(), from: fromId, to: toId, cable: lineCable, length: length || 20 }); showStatus(''); return true;
+}
+
+function render() {
+  const maxPages = pagesCount(); state.currentPage = Math.min(state.currentPage, maxPages);
+  state.selectedIds = state.selectedIds.filter((id) => nodeById(id));
+  if (state.selected && !state.selectedIds.includes(state.selected)) state.selected = state.selectedIds.at(-1) || null;
+  const svg = $('#diagram'); const nodes = pageNodes(); const ids = new Set(nodes.map((node) => node.id));
+  let markup = '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#1c1c1c"/></marker></defs>';
+  const renderedSocapexGroups = new Set();
+  state.links.forEach((link) => {
+    if (link.socapexGroup) {
+      if (renderedSocapexGroups.has(link.socapexGroup)) return;
+      renderedSocapexGroups.add(link.socapexGroup);
+      const group = state.links.filter((item) => item.socapexGroup === link.socapexGroup);
+      const from = nodeById(group[0]?.from), visibleTargets = group.map((item) => ({ link: item, node: nodeById(item.to) })).filter(({ node }) => node && ids.has(node.id));
+      if (!from || !ids.has(from.id) || !visibleTargets.length) return;
+      const startX = from.x + NODE_HALF, endX = Math.min(...visibleTargets.map(({ node }) => node.x - NODE_HALF)), busX = Math.round((startX + endX) / 2), ys = visibleTargets.map(({ node }) => node.y), master = group[0], label = linkLabelPosition(master, from, visibleTargets[0].node);
+      const labelMarkup = `<g class="link-label" data-link-id="${master.id}"><rect class="label-hit" x="${label.x - 5}" y="${label.y - 17}" width="310" height="${label.lines.length * 19 + 10}"/>${label.lines.map((line, index) => `<text class="line-label" x="${label.x}" y="${label.y + index * 19}">${esc(line)}</text>`).join('')}</g>`;
+      markup += `<g class="link ${group.some((item) => item.id === state.selectedLink) ? 'selected' : ''}" data-link-id="${master.id}"><path class="socapex-bus" d="M${startX},${from.y} H${busX} V${Math.min(...ys)} M${busX},${Math.min(...ys)} V${Math.max(...ys)}"/>${visibleTargets.map(({ node }) => `<path class="connector" d="M${busX},${node.y} H${node.x - NODE_HALF}"/>`).join('')}${labelMarkup}</g>`;
+      return;
+    }
+    const from = nodeById(link.from), to = nodeById(link.to); if (!from || !to || !ids.has(from.id)) return;
+    if (!ids.has(to.id)) { markup += `<g class="link" data-link-id="${link.id}"><path class="connector" d="M${from.x + NODE_HALF},${from.y} H1050"/><rect class="page-jump" x="1060" y="${from.y - 22}" width="105" height="44"/><text class="page-jump-text" x="1112" y="${from.y + 5}">Pagina ${to.page}</text></g>`; return; }
+    const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = linkLaneX(link, from), label = linkLabelPosition(link, from, to);
+    const labelMarkup = directCableSiblings(link)[0]?.id === link.id ? `<g class="link-label" data-link-id="${link.id}"><rect class="label-hit" x="${label.x - 5}" y="${label.y - 17}" width="310" height="${label.lines.length * 19 + 10}"/>${label.lines.map((line, index) => `<text class="line-label" x="${label.x}" y="${label.y + index * 19}">${esc(line)}</text>`).join('')}</g>` : '';
+    markup += `<g class="link ${state.selectedLink === link.id ? 'selected' : ''}" data-link-id="${link.id}"><path class="connector" d="M${startX},${from.y} H${midX} V${to.y} H${endX}"/>${labelMarkup}</g>`;
+  });
+  nodes.forEach((node) => {
+    const compact = node.type === 'load', lineHeight = compact ? 14 : 20, topPadding = compact ? 14 : 21, height = Math.max(compact ? 50 : 58, lines.length * lineHeight + (compact ? 10 : 16));
+    const texts = lines.map((line, index) => `<text class="${index === 0 || (node.type === 'panel' && index === 2) ? 'node-title' : ''}" x="${node.x}" y="${node.y - height / 2 + topPadding + index * lineHeight}">${esc(line)}</text>`).join('');
+    markup += `<g class="node ${node.type} ${state.selectedIds.includes(node.id) ? 'selected' : ''}" data-id="${node.id}"><rect x="${node.x - NODE_HALF}" y="${node.y - height / 2}" width="${NODE_HALF * 2}" height="${height}"/>${texts}<circle class="link-handle" data-source="${node.id}" cx="${node.x + NODE_HALF}" cy="${node.y}" r="7"/></g>`;
+  });
+  svg.innerHTML = markup;
+  $('#page-label').textContent = `Pagina ${state.currentPage}`; $('#page-summary').textContent = `${nodes.length} elementi`;
+  $('#block-event').textContent = state.meta.name || '—'; $('#block-location').textContent = state.meta.location || '—'; $('#block-type').textContent = state.meta.type || '—'; $('#block-version').textContent = state.meta.revision || '1.0'; $('#block-company').textContent = state.meta.company || '—'; $('#block-company-address').textContent = state.meta.companyAddress || '—'; $('#block-company-vat').textContent = state.meta.companyVat ? `P. IVA ${state.meta.companyVat}` : ''; $('#block-page').textContent = `Pagina ${state.currentPage} di ${maxPages}`; $('#project-name').textContent = state.meta.name || 'Nuovo progetto';
+  renderInspector();
+}
+function renderCatalog() { $('#cable-catalog').innerHTML = CABLES.map((cable) => `<div class="catalog-item"><strong>${cable.name}</strong>${cable.cable}</div>`).join(''); }
+function renderInspector() {
+  const form = $('#property-form'), node = nodeById(state.selected), link = linkById(state.selectedLink);
+  const selected = node || link; $('.empty-state').hidden = !!selected; form.hidden = !selected; $('#delete-selected').hidden = !selected;
+  if (!selected) return;
+  if (link) {
+    form.innerHTML = `<label>Da<select name="from">${nodeOptions(link.from)}</select></label><label>A<select name="to">${nodeOptions(link.to)}</select></label><label>Linea<select name="cable">${cableOptions(link.cable)}</select></label><label>Lunghezza (m)<input name="length" type="number" min="0" step="0.5" value="${link.length}" /></label><span class="field-help">Puoi eliminare questo collegamento con il pulsante in alto.</span>`;
+    return;
+  }
+  const hasIncoming = state.links.some((item) => item.to === node.id);
+  const connectorControl = node.type === 'load' ? `<label>Spina utenza<select name="plugType">${plugOptions(node.plugType)}</select></label>` : node.type === 'supply' ? `<label>Fornitura<select name="supplyType">${plugOptions(node.supplyType || 'cee125tri')}</select></label>` : '';
+  form.innerHTML = `${state.selectedIds.length > 1 ? `<div class="read-only">${state.selectedIds.length} elementi selezionati. Trascina uno dei blocchi per spostarli insieme.</div>` : ''}<label>Tipo<div class="read-only">${node.type === 'supply' ? 'Fornitura' : node.type === 'panel' ? 'Quadro' : 'Utenza'}</div></label>${node.type === 'panel' && node.panelModel ? `<label>Modello database<div class="read-only">${esc(node.panelModel)}</div></label>` : ''}<label>Pagina<input name="page" type="number" min="1" max="${pagesCount()}" value="${node.page}" /></label><label>Titolo<input name="title" value="${esc(node.title)}" /></label>${connectorControl}${node.type === 'panel' ? '<label>Sottotitolo<input name="subtitle" value="' + esc(node.subtitle) + '" /></label>' : ''}${node.type !== 'supply' ? `<label>Presa<input name="socket" value="${esc(node.socket || '')}" placeholder="Es. P1" /></label>` : ''}<label>${node.type === 'load' ? 'Assorbimento (W)' : 'Dettaglio'}<input name="${node.type === 'load' ? 'watts' : 'details'}" value="${esc(node.type === 'load' ? node.watts || 0 : node.details || '')}" /></label><label>Nota / matricola<input name="details" value="${esc(node.details || '')}" /></label>${hasIncoming ? '<button type="button" class="button" id="unlink-selected">Scollega dal quadro / fornitura</button>' : ''}<span class="field-help">⇧/⌘ + clic per aggiungere o togliere un blocco dalla selezione. Trascina un blocco selezionato per spostarli insieme.</span>`;
+}
+function addNode(type) {
+  const page = state.currentPage, same = pageNodes().filter((node) => node.type === type).length;
+  const defaults = { supply: ['Fornitura', '63 A', '', 90, 135], load: ['Nuova utenza', 'CEE P+N+T 230 V 16 A', 'Assorbimento 0,0 kW', 835, 135 + same * 92] }[type];
+  const node = { id: uid(), type, page, title: defaults[0], subtitle: defaults[1], details: defaults[2], x: defaults[3], y: defaults[4], socket: type === 'supply' ? '' : `P${same + 1}`, watts: 0 };
+  if (type === 'supply') { node.supplyType = 'cee125tri'; node.subtitle = CABLES.find((cable) => cable.id === node.supplyType).plug; }
+  if (type === 'load') { node.plugType = 'cee16mono'; node.subtitle = CABLES.find((cable) => cable.id === node.plugType).plug; }
+  state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; render();
+}
+function selectedPanelPorts(config) { const alternative = (config.alternatives || []).find((item) => item.id === $('#panel-mode').value); return alternative?.ports || config.ports; }
+function addPanelFromLibrary(matricola) {
+  const config = state.library.find((item) => item.matricola === matricola), index = pageNodes().filter((node) => node.type === 'panel').length + 1;
+  const position = panelPosition(index - 1);
+  const alternative = (config.alternatives || []).find((item) => item.id === $('#panel-mode').value);
+  const node = { id: uid(), type: 'panel', page: state.currentPage, x: position.x, y: position.y, title: `Quadro #${index}`, subtitle: 'Da denominare', details: matricola, panelModel: matricola, panelMode: alternative?.label || 'Prese CEE', inputType: config.inputType, socket: '', ports: selectedPanelPorts(config).map((port) => ({ ...port })) };
+  state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#panel-dialog').close(); render();
+}
+function panelPosition(index) { return { x: 280 + Math.floor(index / 5) * 240, y: 165 + (index % 5) * 95 }; }
+function renderTemporaryPorts() { $('#temporary-panel-ports').innerHTML = temporaryPorts.map((port, index) => `<div class="temporary-port"><label>Uscita<select data-port-type="${index}">${plugOptions(port.type)}</select></label><label>Quantità<input data-port-quantity="${index}" type="number" min="1" value="${port.quantity}" /></label>${temporaryPorts.length > 1 ? `<button type="button" data-remove-port="${index}">Rimuovi</button>` : ''}</div>`).join(''); }
+function openTemporaryPanelDialog() { temporaryPorts = [{ type: 'cee16mono', quantity: 1 }]; $('#temporary-panel-input').innerHTML = plugOptions('cee63tri'); $('#temporary-panel-name').value = 'Quadro temporaneo'; $('#temporary-panel-code').value = ''; renderTemporaryPorts(); $('#temporary-panel-dialog').showModal(); }
+function addTemporaryPanel() { const index = pageNodes().filter((node) => node.type === 'panel').length + 1, position = panelPosition(index - 1); const node = { id: uid(), type: 'panel', page: state.currentPage, x: position.x, y: position.y, title: $('#temporary-panel-name').value || `Quadro #${index}`, subtitle: 'Temporaneo', details: $('#temporary-panel-code').value || 'Quadro temporaneo', panelModel: 'Temporaneo', inputType: $('#temporary-panel-input').value, socket: '', ports: temporaryPorts.map((port) => ({ ...port })) }; state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#temporary-panel-dialog').close(); render(); }
+function parseCsv(text, delimiter = ',') {
+  const rows = []; let row = [], cell = '', quote = false;
+  for (let index = 0; index < text.length; index++) { const char = text[index], next = text[index + 1]; if (char === '"' && quote && next === '"') { cell += '"'; index++; } else if (char === '"') quote = !quote; else if (char === delimiter && !quote) { row.push(cell); cell = ''; } else if ((char === '\n' || char === '\r') && !quote) { if (char === '\r' && next === '\n') index++; row.push(cell); if (row.some((value) => value)) rows.push(row); row = []; cell = ''; } else cell += char; }
+  if (cell || row.length) { row.push(cell); rows.push(row); } const keys = rows.shift().map((value) => value.replace(/^\uFEFF/, '').trim()); return rows.map((values) => Object.fromEntries(keys.map((key, index) => [key, values[index] || ''])));
+}
+function circuitPrefix(circuit) { const value = String(circuit || '').trim().replace(/^circuito\s+/i, ''); return (value.match(/^[A-Za-z]+/)?.[0] || value.charAt(0) || 'Altro').toUpperCase(); }
+function arrangeNodes(nodes, anchorX = 600) {
+  const items = [...nodes]; if (!items.length) return;
+  const loadColumn = items.length <= 12 && items.every((node) => node.type === 'load');
+  const rows = loadColumn ? items.length : Math.min(4, items.length), columns = Math.ceil(items.length / rows), stepX = 220, stepY = loadColumn ? 56 : 124;
+  const minCenter = 110 + ((columns - 1) * stepX) / 2, maxCenter = 1090 - ((columns - 1) * stepX) / 2, centerX = Math.max(minCenter, Math.min(maxCenter, anchorX)), startX = centerX - ((columns - 1) * stepX) / 2, startY = 390 - ((rows - 1) * stepY) / 2;
+  items.forEach((node, index) => { const column = Math.floor(index / rows), row = index % rows; node.x = startX + column * stepX; node.y = startY + row * stepY; });
+}
+function prepareCaptureImport(text) {
+  const groups = new Map(); parseCsv(text).forEach((row) => { const circuit = (row.Circuit || '').trim() || 'Senza circuito'; const watts = Number(String(row.Wattage || '0').replace(',', '.').replace(/[^\d.]/g, '')) || 0; const group = groups.get(circuit) || { circuit, watts: 0, fixtures: [] }; group.watts += watts; group.fixtures.push(row.Fixture || 'Fixture'); groups.set(circuit, group); });
+  pendingCaptureGroups = [...groups.values()].sort((first, second) => first.circuit.localeCompare(second.circuit, 'it', { numeric: true, sensitivity: 'base' })); renderCaptureImportDialog(); $('#welcome-dialog').close(); $('#capture-import-dialog').showModal();
+}
+function renderCaptureImportDialog() {
+  const targets = pageNodes().filter((node) => node.type === 'panel');
+  $('#capture-parent').innerHTML = `<option value="">Non collegare ora</option>${targets.map((node) => `<option value="${node.id}">Quadro: ${esc(node.title)}${node.details ? ` (${esc(node.details)})` : ''}</option>`).join('')}`;
+  const prefixes = [...new Set(pendingCaptureGroups.map((group) => circuitPrefix(group.circuit)))];
+  $('#capture-prefix-actions').innerHTML = prefixes.map((prefix) => `<button type="button" data-capture-prefix="${esc(prefix)}">Solo ${esc(prefix)}</button>`).join('');
+  $('#capture-circuit-list').innerHTML = pendingCaptureGroups.map((group, index) => `<label class="capture-circuit"><input type="checkbox" data-capture-index="${index}" checked /><span><strong>Circuito ${esc(group.circuit)}</strong><br />${group.fixtures.length} fixture - ${(group.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW</span></label>`).join('');
+}
+function importSelectedCaptureGroups() {
+  const selected = [...document.querySelectorAll('[data-capture-index]:checked')].map((input) => pendingCaptureGroups[Number(input.dataset.captureIndex)]), parent = $('#capture-parent').value; let index = pageNodes().filter((node) => node.type === 'load').length, linked = 0; const importedIds = [];
+  selected.forEach((group) => { index++; const node = { id: uid(), type: 'load', page: state.currentPage, x: 835, y: Math.min(650, 120 + index * 75), title: `Circuito ${group.circuit}`, subtitle: CABLES[0].plug, plugType: 'cee16mono', details: `Assorbimento ${(group.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`, socket: `P${index}`, watts: group.watts, fixtures: group.fixtures }; state.nodes.push(node); importedIds.push(node.id); if (parent && tryAddLink(parent, node.id, 'cee16mono', 20)) linked++; });
+  arrangeNodes(importedIds.map(nodeById), 900); $('#capture-import-dialog').close(); state.selectedIds = importedIds; state.selected = importedIds.at(-1) || null; render(); showStatus(`Importati ${selected.length} circuiti${parent ? `, collegati ${linked}` : ''}.`);
+}
+function openSocapexDialog() {
+  const panels = pageNodes().filter((node) => node.type === 'panel');
+  const loads = pageNodes().filter((node) => node.type === 'load' && node.plugType === 'cee16mono' && !state.links.some((link) => link.to === node.id));
+  $('#socapex-parent').innerHTML = panels.map((node) => `<option value="${node.id}">${esc(node.title)}${node.details ? ` (${esc(node.details)})` : ''}</option>`).join('');
+  const prefixes = [...new Set(loads.map((node) => circuitPrefix(node.title)))];
+  $('#socapex-prefix-actions').innerHTML = prefixes.map((prefix) => `<button type="button" data-socapex-prefix="${esc(prefix)}">Solo ${esc(prefix)}</button>`).join('');
+  $('#socapex-load-list').innerHTML = loads.length ? loads.map((node) => `<label class="capture-circuit"><input type="checkbox" data-socapex-load="${node.id}" /><span><strong>${esc(node.title)}</strong><br />${esc(node.socket ? `Presa ${node.socket} · ` : '')}${esc(node.details || '')}</span></label>`).join('') : '<p class="help">Non ci sono utenze CEE 16 A monofase non ancora collegate in questa pagina.</p>';
+  if (!panels.length) { showStatus('Aggiungi prima un quadro a questa pagina.'); return; }
+  $('#socapex-dialog').showModal();
+}
+function createSocapexGroup() {
+  const parentId = $('#socapex-parent').value, loadIds = [...document.querySelectorAll('[data-socapex-load]:checked')].map((input) => input.dataset.socapexLoad), parent = nodeById(parentId);
+  if (!parent || !loadIds.length) return showStatus('Seleziona un quadro e almeno un’utenza.');
+  if (loadIds.length > 6) return showStatus('Un Socapex può raggruppare al massimo 6 utenze CEE 16 A monofase.');
+  const capacity = (parent.ports || []).filter((port) => port.type === 'cee16mono').reduce((sum, port) => sum + port.quantity, 0), used = state.links.filter((link) => link.from === parent.id && requiredPlug(nodeById(link.to)) === 'cee16mono').length;
+  if (used + loadIds.length > capacity) return showStatus(`Collegamento bloccato: le prese CEE 16 A monofase del quadro ${parent.title} non bastano (${used}/${capacity} già impegnate).`);
+  const groupId = uid();
+  loadIds.forEach((loadId) => state.links.push({ id: uid(), from: parentId, to: loadId, cable: 'socapex', length: 20, socapexGroup: groupId }));
+  $('#socapex-dialog').close(); state.selected = loadIds.at(-1); state.selectedIds = loadIds; state.selectedLink = null; render(); showStatus(`Creato Socapex unico per ${loadIds.length} utenz${loadIds.length === 1 ? 'a' : 'e'}.`);
+}
+function openBulkConnectDialog() {
+  const sources = pageNodes().filter((node) => node.type === 'panel' || node.type === 'supply'), selectedIds = new Set(state.selectedIds), loads = pageNodes().filter((node) => node.type === 'load' && !state.links.some((link) => link.to === node.id));
+  $('#bulk-connect-parent').innerHTML = sources.map((node) => `<option value="${node.id}" ${selectedIds.has(node.id) ? 'selected' : ''}>${node.type === 'panel' ? 'Quadro' : 'Fornitura'}: ${esc(node.title)}</option>`).join('');
+  $('#bulk-connect-load-list').innerHTML = loads.length ? loads.map((node) => `<label class="capture-circuit"><input type="checkbox" data-bulk-connect-load="${node.id}" ${selectedIds.has(node.id) ? 'checked' : ''}/><span><strong>${esc(node.title)}</strong><br />${esc(node.socket ? `Presa ${node.socket} · ` : '')}${esc(cableById(node.plugType).name)}</span></label>`).join('') : '<p class="help">Non ci sono utenze non ancora collegate in questa pagina.</p>';
+  if (!sources.length) { showStatus('Aggiungi prima un quadro o una fornitura a questa pagina.'); return; }
+  $('#bulk-connect-dialog').showModal();
+}
+function createBulkConnections() {
+  const parentId = $('#bulk-connect-parent').value, targetIds = [...document.querySelectorAll('[data-bulk-connect-load]:checked')].map((input) => input.dataset.bulkConnectLoad), parent = nodeById(parentId);
+  if (!parent || !targetIds.length) return showStatus('Seleziona un quadro / fornitura e almeno un’utenza.');
+  const targets = targetIds.map(nodeById).filter(Boolean), requirements = new Map();
+  targets.forEach((node) => requirements.set(requiredPlug(node), (requirements.get(requiredPlug(node)) || 0) + 1));
+  if (parent.type === 'panel') {
+    for (const [plug, count] of requirements) {
+      const capacity = (parent.ports || []).filter((port) => port.type === plug).reduce((sum, port) => sum + port.quantity, 0), used = state.links.filter((link) => link.from === parent.id && requiredPlug(nodeById(link.to)) === plug).length;
+      if (used + count > capacity) return showStatus(`Collegamento bloccato: le prese ${cableById(plug).name} del quadro ${parent.title} non bastano (${used}/${capacity} già impegnate).`);
+    }
+  }
+  const incompatible = targets.map((node) => compatibilityWarning(parent, node)).find(Boolean); if (incompatible) return showStatus(incompatible);
+  targets.forEach((node) => tryAddLink(parent.id, node.id, requiredPlug(node), 20));
+  $('#bulk-connect-dialog').close(); state.selectedIds = [parent.id, ...targetIds]; state.selected = parent.id; state.selectedLink = null; render(); showStatus(`Collegate ${targetIds.length} utenz${targetIds.length === 1 ? 'a' : 'e'}.`);
+}
+function openArrangeDialog() {
+  const targets = selectedNodes();
+  if (!targets.length) { showStatus('Seleziona gli elementi da ordinare, oppure disegna un riquadro attorno a loro.'); return; }
+  const references = pageNodes().filter((node) => !state.selectedIds.includes(node.id));
+  $('#arrange-reference').innerHTML = references.map((node) => `<option value="${node.id}">${node.type === 'panel' ? 'Quadro' : node.type === 'supply' ? 'Fornitura' : 'Utenza'}: ${esc(node.title)}</option>`).join('');
+  $('#arrange-reference-row').hidden = true; $('#arrange-mode').value = 'center'; $('#arrange-dialog').showModal();
+}
+function arrangeSelectedNodes() {
+  const targets = selectedNodes(), mode = $('#arrange-mode').value, reference = nodeById($('#arrange-reference').value);
+  if (!targets.length) return;
+  arrangeNodes(targets, mode === 'relative' && reference ? reference.x + 310 : 600);
+  $('#arrange-dialog').close(); render(); showStatus(`${targets.length} elementi ordinati.`);
+}
+function migrateLegacySocapex(project) {
+  const legacy = (project.nodes || []).filter((node) => node.type === 'socapex');
+  legacy.forEach((socapex) => {
+    const incoming = project.links.find((link) => link.to === socapex.id), outgoing = project.links.filter((link) => link.from === socapex.id);
+    if (incoming && outgoing.length) {
+      const groupId = uid();
+      outgoing.forEach((link, index) => project.links.push({ id: uid(), from: incoming.from, to: link.to, cable: 'socapex', length: incoming.length || 20, socapexGroup: groupId, labelX: index === 0 ? incoming.labelX : undefined, labelY: index === 0 ? incoming.labelY : undefined }));
+    }
+    project.links = project.links.filter((link) => link.from !== socapex.id && link.to !== socapex.id);
+  });
+  project.nodes = (project.nodes || []).filter((node) => node.type !== 'socapex');
+}
+function panelTypeCode(matricola) { return matricola.match(/^[A-Z]+\d+[A-Z]*/)?.[0] || matricola; }
+function panelTypeLabel(code) { return ({ PB250A: 'Quadro 250 A', PB125A: 'Quadro 125 A', PB63A: 'Quadro 63 A', PB32AT: 'Quadro 32 A trifase', PB32AM: 'Quadro 32 A monofase' })[code] || code; }
+function updatePanelMatricolaChoices() { const type = $('#panel-type').value, models = state.library.filter((model) => panelTypeCode(model.matricola) === type); $('#panel-choice').innerHTML = models.map((model) => `<option value="${model.matricola}">${model.matricola}</option>`).join(''); updatePanelChoiceDetails(); }
+function openPanelDialog() {
+  const types = [...new Set(state.library.map((model) => panelTypeCode(model.matricola)))];
+  if (!types.length) return alert('La libreria standard quadri non è disponibile.');
+  $('#panel-type').innerHTML = types.map((type) => `<option value="${type}">${panelTypeLabel(type)}</option>`).join(''); updatePanelMatricolaChoices(); $('#panel-dialog').showModal();
+}
+function updatePanelChoiceDetails() {
+  const model = state.library.find((row) => row.matricola === $('#panel-choice').value), mode = $('#panel-mode'), modeRow = $('#panel-mode-row'), alternatives = model?.alternatives || [];
+  modeRow.hidden = !alternatives.length; mode.innerHTML = `<option value="cee">Prese CEE</option>${alternatives.map((item) => `<option value="${item.id}">${item.label}</option>`).join('')}`;
+  const ports = selectedPanelPorts(model || { ports: [] }); $('#panel-choice-details').textContent = `${cableById(model?.inputType).name} in ingresso · ${ports.map((port) => `${port.quantity}× ${cableById(port.type).name}`).join(', ')}`;
+}
+function updatePanelModeDetails() { const model = state.library.find((row) => row.matricola === $('#panel-choice').value); const ports = selectedPanelPorts(model || { ports: [] }); $('#panel-choice-details').textContent = `${cableById(model?.inputType).name} in ingresso · ${ports.map((port) => `${port.quantity}× ${cableById(port.type).name}`).join(', ')}`; }
+function showLinkDialog() { $('#link-from').innerHTML = nodeOptions(); $('#link-to').innerHTML = nodeOptions(); $('#link-cable').innerHTML = cableOptions(); $('#link-dialog').showModal(); }
+function save() { const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${(state.meta.name || 'unifilare').replace(/[^\w]+/g, '-').toLowerCase()}.json`; anchor.click(); URL.revokeObjectURL(url); }
+function svgPoint(event) { const svg = $('#diagram'), point = svg.createSVGPoint(); point.x = event.clientX; point.y = event.clientY; return point.matrixTransform(svg.getScreenCTM().inverse()); }
+function bindDiagram() {
+  $('#diagram').addEventListener('pointerdown', (event) => {
+    const handle = event.target.closest('.link-handle'); const labelGroup = event.target.closest('.link-label'); const linkGroup = event.target.closest('.link'); const nodeGroup = event.target.closest('.node');
+    if (handle) {
+      event.stopPropagation(); const source = handle.dataset.source, svg = $('#diagram'), from = nodeById(source), draft = document.createElementNS('http://www.w3.org/2000/svg', 'path'); draft.setAttribute('class', 'connector'); draft.setAttribute('id', 'link-draft'); draft.setAttribute('d', `M${from.x + NODE_HALF},${from.y} L${from.x + NODE_HALF},${from.y}`); svg.append(draft);
+      const move = (next) => { const point = svgPoint(next); draft.setAttribute('d', `M${from.x + NODE_HALF},${from.y} L${point.x},${point.y}`); };
+      const stop = (next) => { draft.remove(); const target = document.elementFromPoint(next.clientX, next.clientY)?.closest('.node')?.dataset.id; if (target && target !== source && !state.links.some((link) => link.from === source && link.to === target)) tryAddLink(source, target, requiredPlug(nodeById(target)) || (from.type === 'supply' ? from.supplyType : 'cee16mono'), 20); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); render(); };
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); return;
+    }
+    if (labelGroup) {
+      const link = linkById(labelGroup.dataset.linkId), from = nodeById(link.from), to = nodeById(link.to), current = linkLabelPosition(link, from, to), start = svgPoint(event), offset = { x: start.x - current.x, y: start.y - current.y };
+      state.selectedLink = link.id; state.selected = null; state.selectedIds = [];
+      const move = (next) => { const point = svgPoint(next); link.labelX = Math.max(10, Math.min(875, point.x - offset.x)); link.labelY = Math.max(22, Math.min(720, point.y - offset.y)); render(); };
+      const stop = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); render(); return;
+    }
+    if (linkGroup) { state.selectedLink = linkGroup.dataset.linkId; state.selected = null; state.selectedIds = []; render(); return; }
+    if (!nodeGroup) {
+      const svg = $('#diagram'), start = svgPoint(event), box = document.createElementNS('http://www.w3.org/2000/svg', 'rect'), additive = event.shiftKey || event.metaKey || event.ctrlKey;
+      box.setAttribute('class', 'selection-box'); svg.append(box);
+      const move = (next) => { const point = svgPoint(next), x = Math.min(start.x, point.x), y = Math.min(start.y, point.y); box.setAttribute('x', x); box.setAttribute('y', y); box.setAttribute('width', Math.abs(point.x - start.x)); box.setAttribute('height', Math.abs(point.y - start.y)); };
+      const stop = (next) => { const point = svgPoint(next), minX = Math.min(start.x, point.x), maxX = Math.max(start.x, point.x), minY = Math.min(start.y, point.y), maxY = Math.max(start.y, point.y), inside = pageNodes().filter((item) => item.x >= minX && item.x <= maxX && item.y >= minY && item.y <= maxY).map((item) => item.id); box.remove(); state.selectedIds = additive ? [...new Set([...state.selectedIds, ...inside])] : inside; state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); render(); };
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); return;
+    }
+    const nodeId = nodeGroup.dataset.id, additive = event.shiftKey || event.metaKey || event.ctrlKey;
+    if (additive) { selectNode(nodeId, true); render(); return; }
+    if (!state.selectedIds.includes(nodeId)) selectNode(nodeId); else { state.selected = nodeId; state.selectedLink = null; }
+    const node = nodeById(nodeId), start = svgPoint(event), positions = selectedNodes().map((item) => ({ node: item, x: item.x, y: item.y }));
+    const move = (next) => { const point = svgPoint(next), dx = point.x - start.x, dy = point.y - start.y; positions.forEach(({ node: item, x, y }) => { item.x = Math.max(85, Math.min(1115, x + dx)); item.y = Math.max(55, Math.min(700, y + dy)); }); render(); };
+    const stop = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); render();
+  });
+}
+function bind() {
+  ['event-name', 'event-location', 'event-type', 'event-version'].forEach((id) => { const key = { 'event-name': 'name', 'event-location': 'location', 'event-type': 'type', 'event-version': 'revision' }[id]; $(`#${id}`).addEventListener('input', (event) => { state.meta[key] = event.target.value; render(); }); });
+  $('#edit-company').onclick = () => { $('#company-name').value = state.meta.company || ''; $('#company-address').value = state.meta.companyAddress || ''; $('#company-vat').value = state.meta.companyVat || ''; $('#company-dialog').showModal(); };
+  $('#confirm-company').onclick = (event) => { event.preventDefault(); state.meta.company = $('#company-name').value.trim(); state.meta.companyAddress = $('#company-address').value.trim(); state.meta.companyVat = $('#company-vat').value.trim(); $('#company-dialog').close(); render(); };
+  $('#add-supply').onclick = () => addNode('supply'); $('#add-panel').onclick = openPanelDialog; $('#add-temp-panel').onclick = openTemporaryPanelDialog; $('#group-socapex').onclick = openSocapexDialog; $('#add-load').onclick = () => addNode('load'); $('#add-link').onclick = showLinkDialog; $('#connect-selected').onclick = openBulkConnectDialog; $('#arrange-selected').onclick = openArrangeDialog; $('#panel-type').onchange = updatePanelMatricolaChoices; $('#panel-choice').onchange = updatePanelChoiceDetails; $('#panel-mode').onchange = updatePanelModeDetails; $('#confirm-panel').onclick = (event) => { event.preventDefault(); addPanelFromLibrary($('#panel-choice').value); };
+  $('#add-temporary-port').onclick = () => { temporaryPorts.push({ type: 'cee16mono', quantity: 1 }); renderTemporaryPorts(); };
+  $('#temporary-panel-ports').addEventListener('input', (event) => { const typeIndex = event.target.dataset.portType, quantityIndex = event.target.dataset.portQuantity; if (typeIndex !== undefined) temporaryPorts[Number(typeIndex)].type = event.target.value; if (quantityIndex !== undefined) temporaryPorts[Number(quantityIndex)].quantity = Math.max(1, Number(event.target.value) || 1); });
+  $('#temporary-panel-ports').addEventListener('click', (event) => { const removeIndex = event.target.dataset.removePort; if (removeIndex !== undefined) { temporaryPorts.splice(Number(removeIndex), 1); renderTemporaryPorts(); } });
+  $('#confirm-temporary-panel').onclick = (event) => { event.preventDefault(); addTemporaryPanel(); };
+  $('#confirm-socapex').onclick = (event) => { event.preventDefault(); createSocapexGroup(); };
+  $('#confirm-bulk-connect').onclick = (event) => { event.preventDefault(); createBulkConnections(); };
+  $('#arrange-mode').onchange = () => { $('#arrange-reference-row').hidden = $('#arrange-mode').value !== 'relative'; }; $('#confirm-arrange').onclick = (event) => { event.preventDefault(); arrangeSelectedNodes(); };
+  $('#socapex-select-all').onclick = () => document.querySelectorAll('[data-socapex-load]').forEach((input) => { input.checked = true; }); $('#socapex-select-none').onclick = () => document.querySelectorAll('[data-socapex-load]').forEach((input) => { input.checked = false; }); $('#socapex-prefix-actions').onclick = (event) => { const prefix = event.target.dataset.socapexPrefix; if (!prefix) return; document.querySelectorAll('[data-socapex-load]').forEach((input) => { input.checked = circuitPrefix(nodeById(input.dataset.socapexLoad)?.title) === prefix; }); }; $('#bulk-connect-select-all').onclick = () => document.querySelectorAll('[data-bulk-connect-load]').forEach((input) => { input.checked = true; }); $('#bulk-connect-select-none').onclick = () => document.querySelectorAll('[data-bulk-connect-load]').forEach((input) => { input.checked = false; });
+  $('#previous-page').onclick = () => { state.currentPage = Math.max(1, state.currentPage - 1); render(); }; $('#next-page').onclick = () => { state.currentPage = Math.min(pagesCount(), state.currentPage + 1); render(); }; $('#new-page').onclick = () => { const page = pagesCount() + 1; state.pages.push(page); state.currentPage = page; render(); };
+  $('#property-form').addEventListener('input', (event) => { const node = nodeById(state.selected); if (!node) return; node[event.target.name] = ['page', 'watts'].includes(event.target.name) ? Number(event.target.value) : event.target.value; if (event.target.name === 'watts') node.details = `Assorbimento ${(node.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`; if (event.target.name === 'plugType') node.subtitle = cableById(node.plugType).plug; if (event.target.name === 'supplyType') node.subtitle = cableById(node.supplyType).plug; });
+  $('#property-form').addEventListener('change', (event) => { const link = linkById(state.selectedLink), node = nodeById(state.selected); if (link) { const before = { ...link }; link[event.target.name] = event.target.name === 'length' ? Number(event.target.value) : event.target.value; const warning = compatibilityWarning(nodeById(link.from), nodeById(link.to), link.id); if (warning) { Object.assign(link, before); showStatus(warning); } else showStatus(''); } if (node) { const invalid = state.links.map((item) => ({ item, warning: compatibilityWarning(nodeById(item.from), nodeById(item.to), item.id) })).find((result) => result.warning); showStatus(invalid?.warning || ''); } render(); });
+  $('#property-form').addEventListener('click', (event) => { if (event.target.id === 'unlink-selected') { state.links = state.links.filter((link) => link.to !== state.selected); render(); } });
+  $('#delete-selected').onclick = () => { if (state.selectedLink) { state.links = state.links.filter((link) => link.id !== state.selectedLink); state.selectedLink = null; } else if (state.selected) { const deletedIds = state.selectedIds.length > 1 ? state.selectedIds : [state.selected]; state.links = state.links.filter((link) => !deletedIds.includes(link.from) && !deletedIds.includes(link.to)); state.nodes = state.nodes.filter((node) => !deletedIds.includes(node.id)); state.selected = null; state.selectedIds = []; } render(); };
+  $('#capture-file').addEventListener('change', (event) => event.target.files[0]?.text().then(prepareCaptureImport)); $('#welcome-capture-file').addEventListener('change', (event) => event.target.files[0]?.text().then(prepareCaptureImport)); $('#welcome-add-supply').onclick = () => { $('#welcome-dialog').close(); addNode('supply'); }; $('#confirm-capture-import').onclick = (event) => { event.preventDefault(); importSelectedCaptureGroups(); }; $('#capture-select-all').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = true; }); $('#capture-select-none').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = false; }); $('#capture-prefix-actions').onclick = (event) => { const prefix = event.target.dataset.capturePrefix; if (!prefix) return; document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = circuitPrefix(pendingCaptureGroups[Number(input.dataset.captureIndex)].circuit) === prefix; }); };
+  $('#confirm-link').onclick = (event) => { event.preventDefault(); const from = $('#link-from').value, to = $('#link-to').value; if (from === to) return alert('Scegli due elementi diversi.'); if (tryAddLink(from, to, $('#link-cable').value, Number($('#link-length').value) || 0)) $('#link-dialog').close(); render(); };
+  $('#save-project').onclick = save; $('#print-project').onclick = () => window.print(); $('#open-project').addEventListener('change', (event) => event.target.files[0]?.text().then((text) => { const loaded = JSON.parse(text); migrateLegacySocapex(loaded); state = { ...loaded, meta: { company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '', ...loaded.meta }, pages: loaded.pages || Array.from({ length: Math.max(1, ...loaded.nodes.map((node) => node.page)) }, (_, index) => index + 1), library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null }; const ids = { name: 'event-name', location: 'event-location', type: 'event-type', revision: 'event-version' }; Object.entries(ids).forEach(([key, id]) => { $(`#${id}`).value = state.meta[key] || ''; }); $('#welcome-dialog').close(); render(); }));
+  bindDiagram();
+}
+renderCatalog(); bind(); render(); $('#welcome-dialog').showModal();
