@@ -65,7 +65,12 @@ function textLines(node) {
   return [node.title, node.socket ? `Presa ${node.socket}` : node.subtitle, node.socket ? node.subtitle : node.details, node.socket ? node.details : ''].filter(Boolean).flatMap((line) => wrapText(line, 23));
 }
 function directCableSiblings(link) { return state.links.filter((item) => !item.socapexGroup && item.from === link.from && item.cable === link.cable && nodeById(item.to)?.page === state.currentPage).sort((first, second) => (nodeById(first.to)?.y || 0) - (nodeById(second.to)?.y || 0)); }
-function linkLabel(link) { const cable = cableById(link.cable), quantity = link.socapexGroup ? 1 : directCableSiblings(link).length; return [`Collegamento tramite presa${quantity > 1 ? ` (${quantity} linee)` : ''}`, cable.plug, `Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri circa`]; }
+function cablePlugLabel(cable) { return cable.plug.replace(/^CEE\s+/, '').replace('3P+N+T', '3P + N + T').replace('P+N+T', 'P + N + T'); }
+function linkLabel(link) {
+  const cable = cableById(link.cable), to = nodeById(link.to), connection = cable.id === 'powerlock' ? 'Collegamento tramite PowerLock' : 'Collegamento tramite presa CEE';
+  if (to?.type !== 'panel') return [`Cavo ${cable.cable}`];
+  return [connection, cablePlugLabel(cable), `Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri circa`];
+}
 function linkLabelPosition(link, from, to) {
   const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = Math.round((startX + endX) / 2), lines = linkLabel(link).flatMap((line) => wrapText(line, 29));
   return { x: link.labelX ?? Math.min(midX + 16, 790), y: link.labelY ?? Math.max(22, Math.min(from.y, to.y) - lines.length * 19 - 7), lines };
@@ -124,7 +129,7 @@ function render() {
     const from = nodeById(link.from), to = nodeById(link.to); if (!from || !to || !ids.has(from.id)) return;
     if (!ids.has(to.id)) { markup += `<g class="link" data-link-id="${link.id}"><path class="connector" d="M${from.x + NODE_HALF},${from.y} H1050"/><rect class="page-jump" x="1060" y="${from.y - 22}" width="105" height="44"/><text class="page-jump-text" x="1112" y="${from.y + 5}">Pagina ${to.page}</text></g>`; return; }
     const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = linkLaneX(link, from), label = linkLabelPosition(link, from, to);
-    const labelMarkup = directCableSiblings(link)[0]?.id === link.id ? `<g class="link-label" data-link-id="${link.id}"><rect class="label-hit" x="${label.x - 5}" y="${label.y - 17}" width="310" height="${label.lines.length * 19 + 10}"/>${label.lines.map((line, index) => `<text class="line-label" x="${label.x}" y="${label.y + index * 19}">${esc(line)}</text>`).join('')}</g>` : '';
+    const labelMarkup = `<g class="link-label" data-link-id="${link.id}"><rect class="label-hit" x="${label.x - 5}" y="${label.y - 17}" width="310" height="${label.lines.length * 19 + 10}"/>${label.lines.map((line, index) => `<text class="line-label" x="${label.x}" y="${label.y + index * 19}">${esc(line)}</text>`).join('')}</g>`;
     markup += `<g class="link ${state.selectedLink === link.id ? 'selected' : ''}" data-link-id="${link.id}"><path class="connector" d="M${startX},${from.y} H${midX} V${to.y} H${endX}"/>${labelMarkup}</g>`;
   });
   nodes.forEach((node) => {
