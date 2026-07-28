@@ -115,6 +115,7 @@ function assignFirstFreeSocket(from, to) {
 function isPanelMatricolaUsed(matricola) { return state.nodes.some((node) => node.type === 'panel' && node.panelModel === matricola); }
 function compatibilityWarning(from, to, ignoredLink = null) {
   if (from.type === 'load') return 'Collegamento bloccato: un’utenza non può alimentare o collegare un’altra utenza.';
+  if (from.type === 'supply' && state.links.some((link) => link.id !== ignoredLink && link.from === from.id)) return `Collegamento bloccato: la fornitura ${from.title} può alimentare un solo quadro.`;
   if (to.type === 'load' && state.links.some((link) => link.id !== ignoredLink && link.to === to.id)) return `Collegamento bloccato: l’utenza ${to.title} è già collegata a un quadro.`;
   const required = requiredPlug(to);
   if (from.type === 'supply' && to.type === 'panel' && from.supplyType !== to.inputType) return `Collegamento bloccato: la fornitura ${cableById(from.supplyType).name} non è compatibile con l'ingresso ${cableById(to.inputType).name} del quadro.`;
@@ -187,7 +188,8 @@ function renderInspector() {
 }
 function addNode(type) {
   const page = state.currentPage, same = pageNodes().filter((node) => node.type === type).length;
-  const defaults = { supply: ['Fornitura', '63 A', '', 90, 135], load: ['Nuova utenza', 'CEE P+N+T 230 V 16 A', 'Assorbimento 0,0 kW', 835, 135 + same * 92] }[type];
+  const supplyNumber = state.nodes.filter((node) => node.type === 'supply').length + 1;
+  const defaults = { supply: [`Fornitura #${supplyNumber}`, '63 A', '', 90, 135 + (supplyNumber - 1) * 95], load: ['Nuova utenza', 'CEE P+N+T 230 V 16 A', 'Assorbimento 0,0 kW', 835, 135 + same * 92] }[type];
   const node = { id: uid(), type, page, title: defaults[0], subtitle: defaults[1], details: defaults[2], x: defaults[3], y: defaults[4], socket: '', watts: 0 };
   if (type === 'supply') { node.supplyType = 'cee125tri'; node.subtitle = CABLES.find((cable) => cable.id === node.supplyType).plug; }
   if (type === 'load') { node.plugType = 'cee16mono'; node.subtitle = CABLES.find((cable) => cable.id === node.plugType).plug; }
@@ -325,10 +327,12 @@ function coverMarkup() {
   const rows = [['Nome Evento', state.meta.name || '—'], ['Location', state.meta.location || '—'], ['Descrizione Allestimento', state.meta.type || '—'], ['Versione', state.meta.revision || '—'], ['Ditta esecutrice', company || '—']];
   return `<article class="cover-sheet"><div class="cover-heading">Schema unifilare di distribuzione elettrica</div><div class="cover-grid">${rows.map(([label, value]) => `<div class="cover-row"><div class="cover-label">${esc(label)}</div><div class="cover-value ${label === 'Ditta esecutrice' ? 'cover-company' : ''}">${esc(value)}</div></div>`).join('')}</div></article>`;
 }
+function indexMarkup(diagramPages) {
+  return `<article class="index-sheet"><div class="index-heading">Indice schemi unifilari</div><div class="index-event">${esc(state.meta.name || 'Nuovo progetto')}</div><div class="index-list">${diagramPages.map((page, index) => `<div><span>Pagina ${index + 3}</span><strong>Schema unifilare - pagina di lavoro ${page}</strong></div>`).join('')}</div></article>`;
+}
 function preparePrint() {
-  const currentPage = state.currentPage, printPages = $('#print-pages'); printPages.innerHTML = coverMarkup();
-  const diagramPages = state.pages || [1];
-  diagramPages.forEach((page, index) => { state.currentPage = page; render(); const sheet = $('#drawing-sheet').cloneNode(true); sheet.removeAttribute('id'); sheet.classList.add('print-sheet'); sheet.querySelector('#block-page').textContent = `Pagina ${index + 2} di ${diagramPages.length + 1}`; printPages.append(sheet); });
+  const currentPage = state.currentPage, printPages = $('#print-pages'), diagramPages = state.pages || [1], hasIndex = diagramPages.length > 1, pageOffset = hasIndex ? 2 : 1; printPages.innerHTML = coverMarkup() + (hasIndex ? indexMarkup(diagramPages) : '');
+  diagramPages.forEach((page, index) => { state.currentPage = page; render(); const sheet = $('#drawing-sheet').cloneNode(true); sheet.removeAttribute('id'); sheet.classList.add('print-sheet'); sheet.querySelector('#block-page').textContent = `Pagina ${index + pageOffset + 1} di ${diagramPages.length + pageOffset}`; printPages.append(sheet); });
   state.currentPage = currentPage; render();
   requestAnimationFrame(() => window.print());
 }
