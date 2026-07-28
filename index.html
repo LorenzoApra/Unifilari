@@ -39,10 +39,12 @@
           <h2>Aggiungi</h2>
           <div class="button-grid">
             <button id="add-supply">Fornitura</button>
+            <button id="reuse-supply">Richiama fornitura</button>
             <button id="add-panel">Quadro</button>
             <button id="add-temp-panel">Quadro temporaneo</button>
             <button id="group-socapex">Raggruppa Socapex</button>
             <button id="add-load">Utenza</button>
+            <button id="add-bulk-loads">Utenze in blocco</button>
             <button id="add-link">Collegamento</button>
             <button id="connect-selected">Collega selezionati</button>
             <button id="arrange-selected">Ordina selezionati</button>
@@ -117,6 +119,29 @@
         <div id="temporary-panel-ports"></div>
         <button type="button" id="add-temporary-port">+ Aggiungi uscita</button>
         <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-temporary-panel" value="default">Aggiungi quadro</button></menu>
+      </form>
+    </dialog>
+    <dialog id="supply-reference-dialog">
+      <form method="dialog">
+        <h2>Richiama una fornitura</h2>
+        <label>Fornitura esistente<select id="supply-reference-choice"></select></label>
+        <p class="help">La fornitura verrà mostrata anche in questa pagina. Ogni richiamo può essere collegato a un solo quadro.</p>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-supply-reference" value="default">Aggiungi alla pagina</button></menu>
+      </form>
+    </dialog>
+    <dialog id="bulk-load-dialog">
+      <form method="dialog">
+        <h2>Aggiungi utenze in blocco</h2>
+        <label>Nome utenza<input id="bulk-load-name" value="Utenza" placeholder="Es. Ledwall" /></label>
+        <div class="bulk-load-grid">
+          <label>Quantità<input id="bulk-load-count" type="number" min="1" max="200" value="6" /></label>
+          <label>Da numero<input id="bulk-load-start" type="number" min="1" value="1" /></label>
+        </div>
+        <label>Spina<select id="bulk-load-plug"></select></label>
+        <label>Assorbimento per utenza (W)<input id="bulk-load-watts" type="number" min="0" step="1" value="0" /></label>
+        <label>Collega subito a<select id="bulk-load-parent"></select></label>
+        <p class="help">Le utenze vengono ordinate automaticamente. Se scegli un quadro, vengono assegnate le prime prese compatibili libere.</p>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-bulk-loads" value="default">Aggiungi utenze</button></menu>
       </form>
     </dialog>
     <dialog id="welcome-dialog">

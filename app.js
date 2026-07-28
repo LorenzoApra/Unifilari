@@ -5,7 +5,9 @@ const CABLES = [
   { id: 'cee32tri', name: 'CEE 32 A trifase', plug: 'CEE 3P+N+T 400 V 32 A', cable: 'H07RN-F 5G6 mm²' },
   { id: 'cee63tri', name: 'CEE 63 A trifase', plug: 'CEE 3P+N+T 400 V 63 A', cable: 'H07RN-F 5G16 mm²' },
   { id: 'cee125tri', name: 'CEE 125 A trifase', plug: 'CEE 3P+N+T 400 V 125 A', cable: 'H07RN-F 5G35 mm²' },
-  { id: 'powerlock', name: 'PowerLock', plug: 'PowerLock trifase', cable: 'Cavo sezione 95 mm²' },
+  { id: 'powerlock', name: 'PowerLock', plug: 'PowerLock trifase', cable: 'Cavo sezione 95 mm²', internal: true },
+  { id: 'powerlock250', name: '250A PowerLock', plug: 'PowerLock 250 A trifase', cable: 'Cavo sezione 95 mm²', supplyOnly: true },
+  { id: 'powerlock400', name: '400A PowerLock', plug: 'PowerLock 400 A trifase', cable: 'Cavo sezione 95 mm²', supplyOnly: true },
   { id: 'socapex', name: 'Socapex', plug: 'Socapex', cable: 'Titanex 19G2,5 mm²' },
 ];
 // Libreria standard derivata da Quadri.xlsx: viene gestita nel codice dell'app, non nell'interfaccia utente.
@@ -32,7 +34,7 @@ const PANEL_LIBRARY = [
 const $ = (selector) => document.querySelector(selector);
 const uid = () => crypto.randomUUID();
 const NODE_HALF = 100;
-let state = { version: 4, meta: { name: '', location: '', type: 'Allestimento Luci', revision: '1.0', company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '' }, pages: [1], currentPage: 1, selected: null, selectedIds: [], selectedLink: null, library: PANEL_LIBRARY, nodes: [], links: [] };
+let state = { version: 5, meta: { name: '', location: '', type: 'Allestimento Luci', revision: '1.0', company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '' }, pages: [1], currentPage: 1, selected: null, selectedIds: [], selectedLink: null, library: PANEL_LIBRARY, nodes: [], links: [] };
 let temporaryPorts = [{ type: 'cee16mono', quantity: 1 }];
 let pendingCaptureGroups = [];
 
@@ -44,6 +46,9 @@ function demoProject() {
   state.links = [{ id: uid(), from: supply.id, to: panel.id, cable: 'cee125tri', length: 20 }, { id: uid(), from: panel.id, to: load.id, cable: 'cee16mono', length: 20 }];
 }
 function nodeById(id) { return state.nodes.find((node) => node.id === id); }
+function supplyKey(node) { return node?.supplyKey || node?.id; }
+function supplyGroup(node) { return state.nodes.filter((item) => item.type === 'supply' && supplyKey(item) === supplyKey(node)); }
+function uniqueSupplies() { return [...new Map(state.nodes.filter((node) => node.type === 'supply').map((node) => [supplyKey(node), node])).values()]; }
 function linkById(id) { return state.links.find((link) => link.id === id); }
 function selectedNodes() { return state.nodes.filter((node) => state.selectedIds.includes(node.id)); }
 function selectNode(id, additive = false) {
@@ -67,7 +72,7 @@ function textLines(node) {
 function directCableSiblings(link) { return state.links.filter((item) => !item.socapexGroup && item.from === link.from && item.cable === link.cable && nodeById(item.to)?.page === state.currentPage).sort((first, second) => (nodeById(first.to)?.y || 0) - (nodeById(second.to)?.y || 0)); }
 function cablePlugLabel(cable) { return cable.plug.replace(/^CEE\s+/, '').replace('3P+N+T', '3P + N + T').replace('P+N+T', 'P + N + T'); }
 function linkLabel(link) {
-  const cable = cableById(link.cable), to = nodeById(link.to), connection = cable.id === 'powerlock' ? 'Collegamento tramite PowerLock' : 'Collegamento tramite presa CEE';
+  const cable = cableById(link.cable), to = nodeById(link.to), connection = isPowerLock(cable.id) ? 'Collegamento tramite PowerLock' : 'Collegamento tramite presa CEE';
   if (to?.type !== 'panel') return [`Cavo ${cable.cable}`];
   return [connection, cablePlugLabel(cable), `Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri circa`];
 }
@@ -82,8 +87,10 @@ function linkLaneX(link, from) {
   return Math.round(startX + 28 + ((index + 1) * Math.max(24, closestTargetX - startX - 56)) / (siblings.length + 1));
 }
 function nodeOptions(selected) { return pageNodes().map((node) => `<option value="${node.id}" ${node.id === selected ? 'selected' : ''}>${esc(node.title)}${node.socket ? ` (${node.socket})` : ''}</option>`).join(''); }
-function cableOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex').map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
-function plugOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex').map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
+function cableOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal && !cable.supplyOnly).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
+function plugOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal && !cable.supplyOnly).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
+function supplyOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
+function isPowerLock(id) { return ['powerlock', 'powerlock250', 'powerlock400'].includes(id); }
 function requiredPlug(node) { return node.type === 'load' ? node.plugType : node.type === 'panel' ? node.inputType : null; }
 function connectionCost() { return 1; }
 const PB63A_SPECIAL_SOCKETS = [
@@ -118,7 +125,7 @@ function compatibilityWarning(from, to, ignoredLink = null) {
   if (from.type === 'supply' && state.links.some((link) => link.id !== ignoredLink && link.from === from.id)) return `Collegamento bloccato: la fornitura ${from.title} può alimentare un solo quadro.`;
   if (to.type === 'load' && state.links.some((link) => link.id !== ignoredLink && link.to === to.id)) return `Collegamento bloccato: l’utenza ${to.title} è già collegata a un quadro.`;
   const required = requiredPlug(to);
-  if (from.type === 'supply' && to.type === 'panel' && from.supplyType !== to.inputType) return `Collegamento bloccato: la fornitura ${cableById(from.supplyType).name} non è compatibile con l'ingresso ${cableById(to.inputType).name} del quadro.`;
+  if (from.type === 'supply' && to.type === 'panel' && from.supplyType !== to.inputType && !(isPowerLock(from.supplyType) && isPowerLock(to.inputType))) return `Collegamento bloccato: la fornitura ${cableById(from.supplyType).name} non è compatibile con l'ingresso ${cableById(to.inputType).name} del quadro.`;
   if (from.type === 'panel' && required) {
     const capacity = (from.ports || []).filter((port) => port.type === required).reduce((sum, port) => sum + port.quantity, 0);
     const used = state.links.filter((link) => link.id !== ignoredLink && link.from === from.id && requiredPlug(nodeById(link.to)) === required).reduce((sum, link) => sum + connectionCost(nodeById(link.to)), 0);
@@ -171,7 +178,7 @@ function render() {
   $('#block-event').textContent = state.meta.name || '—'; $('#block-location').textContent = state.meta.location || '—'; $('#block-type').textContent = state.meta.type || '—'; $('#block-version').textContent = state.meta.revision || '1.0'; $('#block-company').textContent = state.meta.company || '—'; $('#block-company-address').textContent = state.meta.companyAddress || '—'; $('#block-company-vat').textContent = state.meta.companyVat ? `P. IVA ${state.meta.companyVat}` : ''; $('#block-page').textContent = `Pagina ${state.currentPage} di ${maxPages}`; $('#project-name').textContent = state.meta.name || 'Nuovo progetto';
   renderInspector();
 }
-function renderCatalog() { $('#cable-catalog').innerHTML = CABLES.map((cable) => `<div class="catalog-item"><strong>${cable.name}</strong>${cable.cable}</div>`).join(''); }
+function renderCatalog() { $('#cable-catalog').innerHTML = CABLES.filter((cable) => !cable.internal).map((cable) => `<div class="catalog-item"><strong>${cable.name}</strong>${cable.cable}</div>`).join(''); }
 function renderInspector() {
   const form = $('#property-form'), node = nodeById(state.selected), link = linkById(state.selectedLink);
   const selected = node || link; $('.empty-state').hidden = !!selected; form.hidden = !selected; $('#delete-selected').hidden = !selected;
@@ -182,18 +189,49 @@ function renderInspector() {
   }
   const hasIncoming = state.links.some((item) => item.to === node.id);
   const incoming = state.links.find((item) => item.to === node.id), source = incoming && nodeById(incoming.from);
-  const connectorControl = node.type === 'load' ? `<label>Spina utenza<select name="plugType">${plugOptions(node.plugType)}</select></label>` : node.type === 'supply' ? `<label>Fornitura<select name="supplyType">${plugOptions(node.supplyType || 'cee125tri')}</select></label>` : '';
+  const connectorControl = node.type === 'load' ? `<label>Spina utenza<select name="plugType">${plugOptions(node.plugType)}</select></label>` : node.type === 'supply' ? `<label>Fornitura<select name="supplyType">${supplyOptions(node.supplyType || 'cee125tri')}</select></label>` : '';
   const sockets = source?.type === 'panel' ? availablePanelSockets(source, node, incoming.id) : [], socketControl = node.type === 'supply' ? '' : source?.type === 'panel' ? `<label>Presa disponibile<select name="socket" ${sockets.length ? '' : 'disabled'}>${sockets.length ? sockets.map((item) => `<option value="${item.name}" ${item.name === node.socket ? 'selected' : ''}>${item.name} · ${cableById(item.type).name}</option>`).join('') : '<option value="">Nessuna presa compatibile libera</option>'}</select></label><label>Oppure scrivi presa<input name="manualSocket" list="socket-list-${node.id}" value="${esc(node.socket || '')}" placeholder="Es. P1" /><datalist id="socket-list-${node.id}">${sockets.map((item) => `<option value="${item.name}">${cableById(item.type).name}</option>`).join('')}</datalist></label>` : `<label>Presa<input name="socket" value="${esc(node.socket || '')}" placeholder="Es. P1" /></label>`;
-  form.innerHTML = `${state.selectedIds.length > 1 ? `<div class="read-only">${state.selectedIds.length} elementi selezionati. Trascina uno dei blocchi per spostarli insieme.</div>` : ''}<label>Tipo<div class="read-only">${node.type === 'supply' ? 'Fornitura' : node.type === 'panel' ? 'Quadro' : 'Utenza'}</div></label>${node.type === 'panel' && node.panelModel ? `<label>Modello database<div class="read-only">${esc(node.panelModel)}</div></label>` : ''}<label>Pagina<input name="page" type="number" min="1" max="${pagesCount()}" value="${node.page}" /></label><label>Titolo<input name="title" value="${esc(node.title)}" /></label>${connectorControl}${node.type === 'panel' ? '<label>Sottotitolo<input name="subtitle" value="' + esc(node.subtitle) + '" /></label>' : ''}${socketControl}<label>${node.type === 'load' ? 'Assorbimento (W)' : 'Dettaglio'}<input name="${node.type === 'load' ? 'watts' : 'details'}" value="${esc(node.type === 'load' ? node.watts || 0 : node.details || '')}" /></label><label>Nota / matricola<input name="details" value="${esc(node.details || '')}" /></label>${hasIncoming ? '<button type="button" class="button" id="unlink-selected">Scollega dal quadro / fornitura</button>' : ''}<span class="field-help">⇧/⌘ + clic per aggiungere o togliere un blocco dalla selezione. Trascina un blocco selezionato per spostarli insieme.</span>`;
+  const sharedSupply = node.type === 'supply' && supplyGroup(node).length > 1 ? `<div class="read-only">Fornitura condivisa su ${supplyGroup(node).length} pagine: nome, tipo e dettaglio vengono mantenuti uguali.</div>` : '';
+  form.innerHTML = `${state.selectedIds.length > 1 ? `<div class="read-only">${state.selectedIds.length} elementi selezionati. Trascina uno dei blocchi per spostarli insieme.</div>` : ''}<label>Tipo<div class="read-only">${node.type === 'supply' ? 'Fornitura' : node.type === 'panel' ? 'Quadro' : 'Utenza'}</div></label>${sharedSupply}${node.type === 'panel' && node.panelModel ? `<label>Modello database<div class="read-only">${esc(node.panelModel)}</div></label>` : ''}<label>Pagina<input name="page" type="number" min="1" max="${pagesCount()}" value="${node.page}" /></label><label>Titolo<input name="title" value="${esc(node.title)}" /></label>${connectorControl}${node.type === 'panel' ? '<label>Sottotitolo<input name="subtitle" value="' + esc(node.subtitle) + '" /></label>' : ''}${socketControl}<label>${node.type === 'load' ? 'Assorbimento (W)' : 'Dettaglio'}<input name="${node.type === 'load' ? 'watts' : 'details'}" value="${esc(node.type === 'load' ? node.watts || 0 : node.details || '')}" /></label><label>Nota / matricola<input name="details" value="${esc(node.details || '')}" /></label>${hasIncoming ? '<button type="button" class="button" id="unlink-selected">Scollega dal quadro / fornitura</button>' : ''}<span class="field-help">⇧/⌘ + clic per aggiungere o togliere un blocco dalla selezione. Trascina un blocco selezionato per spostarli insieme.</span>`;
 }
 function addNode(type) {
   const page = state.currentPage, same = pageNodes().filter((node) => node.type === type).length;
-  const supplyNumber = state.nodes.filter((node) => node.type === 'supply').length + 1;
+  const supplyNumber = uniqueSupplies().length + 1;
   const defaults = { supply: [`Fornitura #${supplyNumber}`, '63 A', '', 90, 135 + (supplyNumber - 1) * 95], load: ['Nuova utenza', 'CEE P+N+T 230 V 16 A', 'Assorbimento 0,0 kW', 835, 135 + same * 92] }[type];
   const node = { id: uid(), type, page, title: defaults[0], subtitle: defaults[1], details: defaults[2], x: defaults[3], y: defaults[4], socket: '', watts: 0 };
-  if (type === 'supply') { node.supplyType = 'cee125tri'; node.subtitle = CABLES.find((cable) => cable.id === node.supplyType).plug; }
+  if (type === 'supply') { node.supplyKey = uid(); node.supplyType = 'cee125tri'; node.subtitle = CABLES.find((cable) => cable.id === node.supplyType).plug; }
   if (type === 'load') { node.plugType = 'cee16mono'; node.subtitle = CABLES.find((cable) => cable.id === node.plugType).plug; }
   state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; render();
+}
+function openSupplyReferenceDialog() {
+  const supplies = uniqueSupplies().filter((supply) => !pageNodes().some((node) => node.type === 'supply' && supplyKey(node) === supplyKey(supply)));
+  if (!supplies.length) return showStatus('Non ci sono forniture da richiamare in questa pagina.');
+  $('#supply-reference-choice').innerHTML = supplies.map((supply) => `<option value="${supplyKey(supply)}">${esc(supply.title)} - ${esc(cableById(supply.supplyType).name)}</option>`).join('');
+  $('#supply-reference-dialog').showModal();
+}
+function addSupplyReference() {
+  const original = uniqueSupplies().find((supply) => supplyKey(supply) === $('#supply-reference-choice').value);
+  if (!original) return;
+  const referencesOnPage = pageNodes().filter((node) => node.type === 'supply').length;
+  const node = { ...original, id: uid(), page: state.currentPage, x: 90, y: 135 + referencesOnPage * 95, socket: '' };
+  state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#supply-reference-dialog').close(); render();
+}
+function openBulkLoadDialog() {
+  const panels = pageNodes().filter((node) => node.type === 'panel');
+  $('#bulk-load-name').value = 'Utenza'; $('#bulk-load-count').value = 6; $('#bulk-load-start').value = 1; $('#bulk-load-watts').value = 0;
+  $('#bulk-load-plug').innerHTML = plugOptions('cee16mono');
+  $('#bulk-load-parent').innerHTML = `<option value="">Non collegare ora</option>${panels.map((panel) => `<option value="${panel.id}">Quadro: ${esc(panel.title)}${panel.details ? ` (${esc(panel.details)})` : ''}</option>`).join('')}`;
+  $('#bulk-load-dialog').showModal();
+}
+function addBulkLoads() {
+  const count = Math.max(1, Math.min(200, Number($('#bulk-load-count').value) || 1)), start = Math.max(1, Number($('#bulk-load-start').value) || 1), title = $('#bulk-load-name').value.trim() || 'Utenza', plugType = $('#bulk-load-plug').value, watts = Math.max(0, Number($('#bulk-load-watts').value) || 0), parentId = $('#bulk-load-parent').value, nodes = [];
+  for (let index = 0; index < count; index++) {
+    const node = { id: uid(), type: 'load', page: state.currentPage, x: 835, y: 135 + index * 56, title: count === 1 ? title : `${title} ${start + index}`, subtitle: cableById(plugType).plug, plugType, details: `Assorbimento ${(watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`, socket: '', watts };
+    state.nodes.push(node); nodes.push(node);
+  }
+  arrangeNodes(nodes, 900);
+  let linked = 0; nodes.forEach((node) => { if (parentId && tryAddLink(parentId, node.id, plugType, 20)) linked++; });
+  $('#bulk-load-dialog').close(); state.selectedIds = nodes.map((node) => node.id); state.selected = nodes.at(-1)?.id || null; state.selectedLink = null; render(); showStatus(`Aggiunte ${count} utenze${parentId ? `, collegate ${linked}` : ''}.`);
 }
 function selectedPanelPorts(config) { const alternative = (config.alternatives || []).find((item) => item.id === $('#panel-mode').value); return alternative?.ports || config.ports; }
 function addPanelFromLibrary(matricola) {
@@ -306,6 +344,12 @@ function migrateLegacySocapex(project) {
   });
   project.nodes = (project.nodes || []).filter((node) => node.type !== 'socapex');
 }
+function migrateSupplyReferences(project) {
+  (project.nodes || []).filter((node) => node.type === 'supply').forEach((node) => { node.supplyKey ||= node.id; });
+}
+function migratePowerLockSupplyTypes(project) {
+  (project.nodes || []).filter((node) => node.type === 'supply' && node.supplyType === 'powerlock').forEach((node) => { node.supplyType = 'powerlock250'; node.subtitle = cableById(node.supplyType).plug; });
+}
 function panelTypeCode(matricola) { return matricola.match(/^[A-Z]+\d+[A-Z]*/)?.[0] || matricola; }
 function panelTypeLabel(code) { return ({ PB250A: 'Quadro 250 A', PB125A: 'Quadro 125 A', PB63A: 'Quadro 63 A', PB32AT: 'Quadro 32 A trifase', PB32AM: 'Quadro 32 A monofase' })[code] || code; }
 function updatePanelMatricolaChoices() { const type = $('#panel-type').value, models = state.library.filter((model) => panelTypeCode(model.matricola) === type && !isPanelMatricolaUsed(model.matricola)); $('#panel-choice').innerHTML = models.length ? models.map((model) => `<option value="${model.matricola}">${model.matricola}</option>`).join('') : '<option value="">Nessuna matricola disponibile</option>'; updatePanelChoiceDetails(); }
@@ -372,7 +416,7 @@ function bind() {
   ['event-name', 'event-location', 'event-type', 'event-version'].forEach((id) => { const key = { 'event-name': 'name', 'event-location': 'location', 'event-type': 'type', 'event-version': 'revision' }[id]; $(`#${id}`).addEventListener('input', (event) => { state.meta[key] = event.target.value; render(); }); });
   $('#edit-company').onclick = () => { $('#company-name').value = state.meta.company || ''; $('#company-address').value = state.meta.companyAddress || ''; $('#company-vat').value = state.meta.companyVat || ''; $('#company-dialog').showModal(); };
   $('#confirm-company').onclick = (event) => { event.preventDefault(); state.meta.company = $('#company-name').value.trim(); state.meta.companyAddress = $('#company-address').value.trim(); state.meta.companyVat = $('#company-vat').value.trim(); $('#company-dialog').close(); render(); };
-  $('#add-supply').onclick = () => addNode('supply'); $('#add-panel').onclick = openPanelDialog; $('#add-temp-panel').onclick = openTemporaryPanelDialog; $('#group-socapex').onclick = openSocapexDialog; $('#add-load').onclick = () => addNode('load'); $('#add-link').onclick = showLinkDialog; $('#connect-selected').onclick = openBulkConnectDialog; $('#arrange-selected').onclick = openArrangeDialog; $('#panel-type').onchange = updatePanelMatricolaChoices; $('#panel-choice').onchange = updatePanelChoiceDetails; $('#panel-mode').onchange = updatePanelModeDetails; $('#confirm-panel').onclick = (event) => { event.preventDefault(); addPanelFromLibrary($('#panel-choice').value); };
+  $('#add-supply').onclick = () => addNode('supply'); $('#reuse-supply').onclick = openSupplyReferenceDialog; $('#confirm-supply-reference').onclick = (event) => { event.preventDefault(); addSupplyReference(); }; $('#add-panel').onclick = openPanelDialog; $('#add-temp-panel').onclick = openTemporaryPanelDialog; $('#group-socapex').onclick = openSocapexDialog; $('#add-load').onclick = () => addNode('load'); $('#add-bulk-loads').onclick = openBulkLoadDialog; $('#confirm-bulk-loads').onclick = (event) => { event.preventDefault(); addBulkLoads(); }; $('#add-link').onclick = showLinkDialog; $('#connect-selected').onclick = openBulkConnectDialog; $('#arrange-selected').onclick = openArrangeDialog; $('#panel-type').onchange = updatePanelMatricolaChoices; $('#panel-choice').onchange = updatePanelChoiceDetails; $('#panel-mode').onchange = updatePanelModeDetails; $('#confirm-panel').onclick = (event) => { event.preventDefault(); addPanelFromLibrary($('#panel-choice').value); };
   $('#add-temporary-port').onclick = () => { temporaryPorts.push({ type: 'cee16mono', quantity: 1 }); renderTemporaryPorts(); };
   $('#temporary-panel-ports').addEventListener('input', (event) => { const typeIndex = event.target.dataset.portType, quantityIndex = event.target.dataset.portQuantity; if (typeIndex !== undefined) temporaryPorts[Number(typeIndex)].type = event.target.value; if (quantityIndex !== undefined) temporaryPorts[Number(quantityIndex)].quantity = Math.max(1, Number(event.target.value) || 1); });
   $('#temporary-panel-ports').addEventListener('click', (event) => { const removeIndex = event.target.dataset.removePort; if (removeIndex !== undefined) { temporaryPorts.splice(Number(removeIndex), 1); renderTemporaryPorts(); } });
@@ -382,13 +426,13 @@ function bind() {
   $('#arrange-mode').onchange = () => { $('#arrange-reference-row').hidden = $('#arrange-mode').value !== 'relative'; }; $('#confirm-arrange').onclick = (event) => { event.preventDefault(); arrangeSelectedNodes(); };
   $('#socapex-select-all').onclick = () => document.querySelectorAll('[data-socapex-load]').forEach((input) => { input.checked = true; }); $('#socapex-select-none').onclick = () => document.querySelectorAll('[data-socapex-load]').forEach((input) => { input.checked = false; }); $('#socapex-prefix-actions').onclick = (event) => { const prefix = event.target.dataset.socapexPrefix; if (!prefix) return; document.querySelectorAll('[data-socapex-load]').forEach((input) => { input.checked = circuitPrefix(nodeById(input.dataset.socapexLoad)?.title) === prefix; }); }; $('#bulk-connect-select-all').onclick = () => document.querySelectorAll('[data-bulk-connect-load]').forEach((input) => { input.checked = true; }); $('#bulk-connect-select-none').onclick = () => document.querySelectorAll('[data-bulk-connect-load]').forEach((input) => { input.checked = false; });
   $('#previous-page').onclick = () => { state.currentPage = Math.max(1, state.currentPage - 1); render(); }; $('#next-page').onclick = () => { state.currentPage = Math.min(pagesCount(), state.currentPage + 1); render(); }; $('#new-page').onclick = () => { const page = pagesCount() + 1; state.pages.push(page); state.currentPage = page; render(); };
-  $('#property-form').addEventListener('input', (event) => { const node = nodeById(state.selected); if (!node || ['socket', 'manualSocket'].includes(event.target.name)) return; node[event.target.name] = ['page', 'watts'].includes(event.target.name) ? Number(event.target.value) : event.target.value; if (event.target.name === 'watts') node.details = `Assorbimento ${(node.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`; if (event.target.name === 'plugType') node.subtitle = cableById(node.plugType).plug; if (event.target.name === 'supplyType') node.subtitle = cableById(node.supplyType).plug; });
+  $('#property-form').addEventListener('input', (event) => { const node = nodeById(state.selected); if (!node || ['socket', 'manualSocket'].includes(event.target.name)) return; const value = ['page', 'watts'].includes(event.target.name) ? Number(event.target.value) : event.target.value, sharedFields = ['title', 'supplyType', 'details']; (node.type === 'supply' && sharedFields.includes(event.target.name) ? supplyGroup(node) : [node]).forEach((item) => { item[event.target.name] = value; if (event.target.name === 'supplyType') item.subtitle = cableById(item.supplyType).plug; }); if (event.target.name === 'watts') node.details = `Assorbimento ${(node.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`; if (event.target.name === 'plugType') node.subtitle = cableById(node.plugType).plug; });
   $('#property-form').addEventListener('change', (event) => { const link = linkById(state.selectedLink), node = nodeById(state.selected); if (link) { const before = { ...link }, target = nodeById(link.to), previousSocket = target?.socket || '', changesEndpoint = ['from', 'to'].includes(event.target.name); link[event.target.name] = event.target.name === 'length' ? Number(event.target.value) : event.target.value; if (changesEndpoint && target) target.socket = ''; const warning = compatibilityWarning(nodeById(link.from), nodeById(link.to), link.id); if (warning || (changesEndpoint && !assignFirstFreeSocket(nodeById(link.from), nodeById(link.to)))) { Object.assign(link, before); if (target) target.socket = previousSocket; if (warning) showStatus(warning); } else showStatus(''); } if (node && ['socket', 'manualSocket'].includes(event.target.name)) { const incoming = state.links.find((item) => item.to === node.id), source = incoming && nodeById(incoming.from), proposed = event.target.value.trim().toUpperCase(), warning = socketWarning(source, node, proposed, incoming?.id); if (warning) showStatus(warning); else { node.socket = proposed; showStatus(''); } } if (node) { const invalid = state.links.map((item) => ({ item, warning: compatibilityWarning(nodeById(item.from), nodeById(item.to), item.id) })).find((result) => result.warning), incoming = state.links.find((item) => item.to === node.id), socketIssue = incoming ? socketWarning(nodeById(incoming.from), node, node.socket, incoming.id) : ''; showStatus(invalid?.warning || socketIssue || ''); } render(); });
   $('#property-form').addEventListener('click', (event) => { if (event.target.id === 'unlink-selected') { state.links.filter((link) => link.to === state.selected).forEach((link) => { const target = nodeById(link.to); if (target) target.socket = ''; }); state.links = state.links.filter((link) => link.to !== state.selected); render(); } });
   $('#delete-selected').onclick = () => { if (state.selectedLink) { const link = linkById(state.selectedLink), target = link && nodeById(link.to); if (target) target.socket = ''; state.links = state.links.filter((item) => item.id !== state.selectedLink); state.selectedLink = null; } else if (state.selected) { const deletedIds = state.selectedIds.length > 1 ? state.selectedIds : [state.selected]; state.links = state.links.filter((link) => !deletedIds.includes(link.from) && !deletedIds.includes(link.to)); state.nodes = state.nodes.filter((node) => !deletedIds.includes(node.id)); state.selected = null; state.selectedIds = []; } render(); };
   $('#capture-file').addEventListener('change', (event) => event.target.files[0]?.text().then(prepareCaptureImport)); $('#welcome-capture-file').addEventListener('change', (event) => event.target.files[0]?.text().then(prepareCaptureImport)); $('#welcome-add-supply').onclick = () => { $('#welcome-dialog').close(); addNode('supply'); }; $('#confirm-capture-import').onclick = (event) => { event.preventDefault(); importSelectedCaptureGroups(); }; $('#capture-select-all').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = true; }); $('#capture-select-none').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = false; }); $('#capture-prefix-actions').onclick = (event) => { const prefix = event.target.dataset.capturePrefix; if (!prefix) return; document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = circuitPrefix(pendingCaptureGroups[Number(input.dataset.captureIndex)].circuit) === prefix; }); };
   $('#confirm-link').onclick = (event) => { event.preventDefault(); const from = $('#link-from').value, to = $('#link-to').value; if (from === to) return alert('Scegli due elementi diversi.'); if (tryAddLink(from, to, $('#link-cable').value, Number($('#link-length').value) || 0)) $('#link-dialog').close(); render(); };
-  $('#save-project').onclick = save; $('#print-project').onclick = preparePrint; $('#open-project').addEventListener('change', (event) => event.target.files[0]?.text().then((text) => { const loaded = JSON.parse(text); migrateLegacySocapex(loaded); state = { ...loaded, meta: { company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '', ...loaded.meta }, pages: loaded.pages || Array.from({ length: Math.max(1, ...loaded.nodes.map((node) => node.page)) }, (_, index) => index + 1), library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null }; const ids = { name: 'event-name', location: 'event-location', type: 'event-type', revision: 'event-version' }; Object.entries(ids).forEach(([key, id]) => { $(`#${id}`).value = state.meta[key] || ''; }); $('#welcome-dialog').close(); render(); }));
+  $('#save-project').onclick = save; $('#print-project').onclick = preparePrint; $('#open-project').addEventListener('change', (event) => event.target.files[0]?.text().then((text) => { const loaded = JSON.parse(text); migrateLegacySocapex(loaded); migrateSupplyReferences(loaded); migratePowerLockSupplyTypes(loaded); state = { ...loaded, meta: { company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '', ...loaded.meta }, pages: loaded.pages || Array.from({ length: Math.max(1, ...loaded.nodes.map((node) => node.page)) }, (_, index) => index + 1), library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null }; const ids = { name: 'event-name', location: 'event-location', type: 'event-type', revision: 'event-version' }; Object.entries(ids).forEach(([key, id]) => { $(`#${id}`).value = state.meta[key] || ''; }); $('#welcome-dialog').close(); render(); }));
   bindDiagram();
 }
 renderCatalog(); bind(); render(); $('#welcome-dialog').showModal();
