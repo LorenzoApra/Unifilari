@@ -7,7 +7,7 @@ const CABLES = [
   { id: 'cee125tri', name: 'CEE 125 A trifase', plug: 'CEE 3P+N+T 400 V 125 A', cable: 'H07RN-F 5G35 mm²' },
   { id: 'powerlock', name: 'PowerLock', plug: 'PowerLock trifase', cable: 'Cavo sezione 95 mm²', internal: true },
   { id: 'powerlock250', name: '250A PowerLock', plug: 'PowerLock 250 A trifase', cable: 'Cavo sezione 95 mm²', supplyOnly: true },
-  { id: 'powerlock400', name: '400A PowerLock', plug: 'PowerLock 400 A trifase', cable: 'Cavo sezione 95 mm²', supplyOnly: true },
+  { id: 'powerlock400', name: '400A PowerLock', plug: 'PowerLock 400 A trifase', cable: 'Cavo sezione 120 mm²', supplyOnly: true },
   { id: 'socapex', name: 'Socapex', plug: 'Socapex', cable: 'Titanex 19G2,5 mm²' },
 ];
 // Libreria standard derivata da Quadri.xlsx: viene gestita nel codice dell'app, non nell'interfaccia utente.
@@ -90,10 +90,12 @@ function linkLaneX(link, from) {
   return Math.round(startX + 28 + ((index + 1) * Math.max(24, closestTargetX - startX - 56)) / (siblings.length + 1));
 }
 function nodeOptions(selected) { return pageNodes().map((node) => `<option value="${node.id}" ${node.id === selected ? 'selected' : ''}>${esc(node.title)}${node.socket ? ` (${node.socket})` : ''}</option>`).join(''); }
-function cableOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal && !cable.supplyOnly).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
+function cableOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
 function plugOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal && !cable.supplyOnly).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
 function supplyOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
+function panelPortOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.supplyOnly).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
 function isPowerLock(id) { return ['powerlock', 'powerlock250', 'powerlock400'].includes(id); }
+function compatibleConnector(first, second) { return first === second || (isPowerLock(first) && isPowerLock(second)); }
 function requiredPlug(node) { return node.type === 'load' ? node.plugType : node.type === 'panel' ? node.inputType : null; }
 function connectionCost() { return 1; }
 const PB63A_SPECIAL_SOCKETS = [
@@ -107,11 +109,11 @@ function panelSockets(panel) {
 }
 function availablePanelSockets(panel, target, ignoredLink = null) {
   const required = requiredPlug(target), used = new Set(state.links.filter((link) => link.id !== ignoredLink && panelKey(nodeById(link.from)) === panelKey(panel)).map((link) => nodeById(link.to)?.socket).filter(Boolean));
-  return panelSockets(panel).filter((socket) => socket.type === required && (!used.has(socket.name) || (ignoredLink && socket.name === target.socket)));
+  return panelSockets(panel).filter((socket) => compatibleConnector(socket.type, required) && (!used.has(socket.name) || (ignoredLink && socket.name === target.socket)));
 }
 function socketWarning(panel, target, socket, ignoredLink = null) {
   if (panel?.type !== 'panel' || !socket) return '';
-  const matching = panelSockets(panel).filter((item) => item.type === requiredPlug(target));
+  const matching = panelSockets(panel).filter((item) => compatibleConnector(item.type, requiredPlug(target)));
   if (!matching.some((item) => item.name === socket)) return `La presa ${socket} non è compatibile con ${cableById(requiredPlug(target)).name}.`;
   if (!availablePanelSockets(panel, target, ignoredLink).some((item) => item.name === socket)) return `La presa ${socket} del quadro ${panel.title} è già occupata.`;
   return '';
@@ -131,8 +133,8 @@ function compatibilityWarning(from, to, ignoredLink = null) {
   const required = requiredPlug(to);
   if (from.type === 'supply' && to.type === 'panel' && from.supplyType !== to.inputType && !(isPowerLock(from.supplyType) && isPowerLock(to.inputType))) return `Collegamento bloccato: la fornitura ${cableById(from.supplyType).name} non è compatibile con l'ingresso ${cableById(to.inputType).name} del quadro.`;
   if (from.type === 'panel' && required) {
-    const capacity = (from.ports || []).filter((port) => port.type === required).reduce((sum, port) => sum + port.quantity, 0);
-    const used = state.links.filter((link) => link.id !== ignoredLink && panelKey(nodeById(link.from)) === panelKey(from) && requiredPlug(nodeById(link.to)) === required).reduce((sum, link) => sum + connectionCost(nodeById(link.to)), 0);
+    const capacity = (from.ports || []).filter((port) => compatibleConnector(port.type, required)).reduce((sum, port) => sum + port.quantity, 0);
+    const used = state.links.filter((link) => link.id !== ignoredLink && panelKey(nodeById(link.from)) === panelKey(from) && compatibleConnector(requiredPlug(nodeById(link.to)), required)).reduce((sum, link) => sum + connectionCost(nodeById(link.to)), 0);
     if (!capacity) return `Collegamento bloccato: ${from.title} non ha uscite ${cableById(required).name}.`;
     if (used >= capacity) return `Collegamento bloccato: le prese ${cableById(required).name} del quadro ${from.title} sono finite (${used}/${capacity}).`;
   }
@@ -262,8 +264,8 @@ function addPanelFromLibrary(matricola) {
   state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#panel-dialog').close(); render();
 }
 function panelPosition(index) { return { x: 280 + Math.floor(index / 5) * 240, y: 165 + (index % 5) * 95 }; }
-function renderTemporaryPorts() { $('#temporary-panel-ports').innerHTML = temporaryPorts.map((port, index) => `<div class="temporary-port"><label>Uscita<select data-port-type="${index}">${plugOptions(port.type)}</select></label><label>Quantità<input data-port-quantity="${index}" type="number" min="1" value="${port.quantity}" /></label>${temporaryPorts.length > 1 ? `<button type="button" data-remove-port="${index}">Rimuovi</button>` : ''}</div>`).join(''); }
-function openTemporaryPanelDialog() { temporaryPorts = [{ type: 'cee16mono', quantity: 1 }]; $('#temporary-panel-input').innerHTML = plugOptions('cee63tri'); $('#temporary-panel-name').value = 'Quadro temporaneo'; $('#temporary-panel-code').value = ''; renderTemporaryPorts(); $('#temporary-panel-dialog').showModal(); }
+function renderTemporaryPorts() { $('#temporary-panel-ports').innerHTML = temporaryPorts.map((port, index) => `<div class="temporary-port"><label>Uscita<select data-port-type="${index}">${panelPortOptions(port.type)}</select></label><label>Quantità<input data-port-quantity="${index}" type="number" min="1" value="${port.quantity}" /></label>${temporaryPorts.length > 1 ? `<button type="button" data-remove-port="${index}">Rimuovi</button>` : ''}</div>`).join(''); }
+function openTemporaryPanelDialog() { temporaryPorts = [{ type: 'cee16mono', quantity: 1 }]; $('#temporary-panel-input').innerHTML = supplyOptions('cee63tri'); $('#temporary-panel-name').value = 'Quadro temporaneo'; $('#temporary-panel-code').value = ''; renderTemporaryPorts(); $('#temporary-panel-dialog').showModal(); }
 function addTemporaryPanel() { const index = pageNodes().filter((node) => node.type === 'panel').length + 1, position = panelPosition(index - 1); const node = { id: uid(), panelKey: uid(), type: 'panel', page: state.currentPage, x: position.x, y: position.y, title: $('#temporary-panel-name').value || `Quadro #${index}`, subtitle: 'Temporaneo', details: $('#temporary-panel-code').value || 'Quadro temporaneo', panelModel: 'Temporaneo', inputType: $('#temporary-panel-input').value, socket: '', ports: temporaryPorts.map((port) => ({ ...port })) }; state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#temporary-panel-dialog').close(); render(); }
 function parseCsv(text, delimiter = ',') {
   const rows = []; let row = [], cell = '', quote = false;
@@ -371,6 +373,7 @@ function migratePanelReferences(project) {
 }
 function migratePowerLockSupplyTypes(project) {
   (project.nodes || []).filter((node) => node.type === 'supply' && node.supplyType === 'powerlock').forEach((node) => { node.supplyType = 'powerlock250'; node.subtitle = cableById(node.supplyType).plug; });
+  (project.links || []).filter((link) => link.cable === 'powerlock').forEach((link) => { const source = (project.nodes || []).find((node) => node.id === link.from); link.cable = source?.supplyType === 'powerlock400' ? 'powerlock400' : 'powerlock250'; });
 }
 function panelTypeCode(matricola) { return matricola.match(/^[A-Z]+\d+[A-Z]*/)?.[0] || matricola; }
 function panelTypeLabel(code) { return ({ PB250A: 'Quadro 250 A', PB125A: 'Quadro 125 A', PB63A: 'Quadro 63 A', PB32AT: 'Quadro 32 A trifase', PB32AM: 'Quadro 32 A monofase' })[code] || code; }
