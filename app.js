@@ -128,7 +128,7 @@ function render() {
     markup += `<g class="link ${state.selectedLink === link.id ? 'selected' : ''}" data-link-id="${link.id}"><path class="connector" d="M${startX},${from.y} H${midX} V${to.y} H${endX}"/>${labelMarkup}</g>`;
   });
   nodes.forEach((node) => {
-    const compact = node.type === 'load', lineHeight = compact ? 14 : 20, topPadding = compact ? 14 : 21, height = Math.max(compact ? 50 : 58, lines.length * lineHeight + (compact ? 10 : 16));
+    const lines = textLines(node), compact = node.type === 'load', lineHeight = compact ? 14 : 20, topPadding = compact ? 14 : 21, height = Math.max(compact ? 50 : 58, lines.length * lineHeight + (compact ? 10 : 16));
     const texts = lines.map((line, index) => `<text class="${index === 0 || (node.type === 'panel' && index === 2) ? 'node-title' : ''}" x="${node.x}" y="${node.y - height / 2 + topPadding + index * lineHeight}">${esc(line)}</text>`).join('');
     markup += `<g class="node ${node.type} ${state.selectedIds.includes(node.id) ? 'selected' : ''}" data-id="${node.id}"><rect x="${node.x - NODE_HALF}" y="${node.y - height / 2}" width="${NODE_HALF * 2}" height="${height}"/>${texts}<circle class="link-handle" data-source="${node.id}" cx="${node.x + NODE_HALF}" cy="${node.y}" r="7"/></g>`;
   });
