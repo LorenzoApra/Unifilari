@@ -42,6 +42,7 @@
             <button id="reuse-supply">Richiama fornitura</button>
             <button id="add-panel">Quadro</button>
             <button id="reuse-panel">Richiama quadro</button>
+            <button id="reuse-link">Richiama collegamento</button>
             <button id="add-temp-panel">Quadro temporaneo</button>
             <button id="group-socapex">Raggruppa Socapex</button>
             <button id="add-load">Utenza</button>
@@ -136,6 +137,14 @@
         <label>Quadro esistente<select id="panel-reference-choice"></select></label>
         <p class="help">Il quadro verrà mostrato anche in questa pagina. Le sue prese rimangono condivise con gli altri richiami.</p>
         <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-panel-reference" value="default">Aggiungi alla pagina</button></menu>
+      </form>
+    </dialog>
+    <dialog id="link-reference-dialog">
+      <form method="dialog">
+        <h2>Richiama un collegamento</h2>
+        <label>Collegamento esistente<select id="link-reference-choice"></select></label>
+        <p class="help">Vengono collegati i richiami già presenti in questa pagina, senza impegnare una seconda volta prese o ingressi.</p>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-link-reference" value="default">Richiama collegamento</button></menu>
       </form>
     </dialog>
     <dialog id="bulk-load-dialog">

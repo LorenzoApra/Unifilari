@@ -37,6 +37,7 @@ const NODE_HALF = 100;
 let state = { version: 5, meta: { name: '', location: '', type: 'Allestimento Luci', revision: '1.0', company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '' }, pages: [1], currentPage: 1, selected: null, selectedIds: [], selectedLink: null, library: PANEL_LIBRARY, nodes: [], links: [] };
 let temporaryPorts = [{ type: 'cee16mono', quantity: 1 }];
 let editingTemporaryPanelId = null;
+let pendingLinkReferences = [];
 let pendingCaptureGroups = [];
 
 function demoProject() {
@@ -47,6 +48,7 @@ function demoProject() {
   state.links = [{ id: uid(), from: supply.id, to: panel.id, cable: 'cee125tri', length: 20 }, { id: uid(), from: panel.id, to: load.id, cable: 'cee16mono', length: 20 }];
 }
 function nodeById(id) { return state.nodes.find((node) => node.id === id); }
+function isReferenceLink(link) { return !!link?.referenceLink; }
 function supplyKey(node) { return node?.supplyKey || node?.id; }
 function supplyGroup(node) { return state.nodes.filter((item) => item.type === 'supply' && supplyKey(item) === supplyKey(node)); }
 function uniqueSupplies() { return [...new Map(state.nodes.filter((node) => node.type === 'supply').map((node) => [supplyKey(node), node])).values()]; }
@@ -75,11 +77,12 @@ function textLines(node) {
 }
 function directCableSiblings(link) { return state.links.filter((item) => !item.socapexGroup && item.from === link.from && item.cable === link.cable && nodeById(item.to)?.page === state.currentPage).sort((first, second) => (nodeById(first.to)?.y || 0) - (nodeById(second.to)?.y || 0)); }
 function cablePlugLabel(cable) { return cable.plug.replace(/^CEE\s+/, '').replace('3P+N+T', '3P + N + T').replace('P+N+T', 'P + N + T'); }
+function cableShortLabel(cable) { return cable.name.replace(/ monofase| trifase/gi, '').replace(/ (\d+) A$/, ' $1A'); }
 function linkLabel(link) {
-  const cable = cableById(link.cable), to = nodeById(link.to), connection = isPowerLock(cable.id) ? 'Collegamento tramite PowerLock' : 'Collegamento tramite presa CEE';
+  const cable = cableById(link.cable);
   if (isPowerLock(cable.id)) return ['Collegamento tramite', 'Cavo singolo polo PowerLock', `Lunghezza linea ${link.length || 0} metri`];
-  if (to?.type !== 'panel') return [`Cavo ${cable.cable}`];
-  return [connection, cablePlugLabel(cable), `Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri circa`];
+  if (cable.id === 'socapex') return [`Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri`];
+  return [cableShortLabel(cable), `Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri`];
 }
 function linkLabelPosition(link, from, to) {
   const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = Math.round((startX + endX) / 2), lines = linkLabel(link).flatMap((line) => wrapText(line, 29));
@@ -110,7 +113,7 @@ function panelSockets(panel) {
   return (panel.ports || []).flatMap((port) => Array.from({ length: port.quantity }, () => ({ name: `P${++index}`, type: port.type })));
 }
 function availablePanelSockets(panel, target, ignoredLink = null) {
-  const required = requiredPlug(target), used = new Set(state.links.filter((link) => link.id !== ignoredLink && panelKey(nodeById(link.from)) === panelKey(panel)).map((link) => nodeById(link.to)?.socket).filter(Boolean));
+  const required = requiredPlug(target), used = new Set(state.links.filter((link) => !isReferenceLink(link) && link.id !== ignoredLink && panelKey(nodeById(link.from)) === panelKey(panel)).map((link) => nodeById(link.to)?.socket).filter(Boolean));
   return panelSockets(panel).filter((socket) => compatibleConnector(socket.type, required) && (!used.has(socket.name) || (ignoredLink && socket.name === target.socket)));
 }
 function socketWarning(panel, target, socket, ignoredLink = null) {
@@ -129,26 +132,40 @@ function assignFirstFreeSocket(from, to) {
 function isPanelMatricolaUsed(matricola) { return state.nodes.some((node) => node.type === 'panel' && node.panelModel === matricola); }
 function compatibilityWarning(from, to, ignoredLink = null) {
   if (from.type === 'load') return 'Collegamento bloccato: un’utenza non può alimentare o collegare un’altra utenza.';
-  if (from.type === 'supply' && state.links.some((link) => link.id !== ignoredLink && link.from === from.id)) return `Collegamento bloccato: la fornitura ${from.title} può alimentare un solo quadro.`;
-  if (to.type === 'load' && state.links.some((link) => link.id !== ignoredLink && link.to === to.id)) return `Collegamento bloccato: l’utenza ${to.title} è già collegata a un quadro.`;
-  if (to.type === 'panel' && state.links.some((link) => link.id !== ignoredLink && panelKey(nodeById(link.to)) === panelKey(to))) return `Collegamento bloccato: il quadro ${to.title} è già alimentato.`;
+  if (from.type === 'supply' && state.links.some((link) => !isReferenceLink(link) && link.id !== ignoredLink && link.from === from.id)) return `Collegamento bloccato: la fornitura ${from.title} può alimentare un solo quadro.`;
+  if (to.type === 'load' && state.links.some((link) => !isReferenceLink(link) && link.id !== ignoredLink && link.to === to.id)) return `Collegamento bloccato: l’utenza ${to.title} è già collegata a un quadro.`;
+  if (to.type === 'panel' && state.links.some((link) => !isReferenceLink(link) && link.id !== ignoredLink && panelKey(nodeById(link.to)) === panelKey(to))) return `Collegamento bloccato: il quadro ${to.title} è già alimentato.`;
   const required = requiredPlug(to);
   if (from.type === 'supply' && to.type === 'panel' && from.supplyType !== to.inputType && !(isPowerLock(from.supplyType) && isPowerLock(to.inputType))) return `Collegamento bloccato: la fornitura ${cableById(from.supplyType).name} non è compatibile con l'ingresso ${cableById(to.inputType).name} del quadro.`;
   if (from.type === 'panel' && required) {
     const capacity = (from.ports || []).filter((port) => compatibleConnector(port.type, required)).reduce((sum, port) => sum + port.quantity, 0);
-    const used = state.links.filter((link) => link.id !== ignoredLink && panelKey(nodeById(link.from)) === panelKey(from) && compatibleConnector(requiredPlug(nodeById(link.to)), required)).reduce((sum, link) => sum + connectionCost(nodeById(link.to)), 0);
+    const used = state.links.filter((link) => !isReferenceLink(link) && link.id !== ignoredLink && panelKey(nodeById(link.from)) === panelKey(from) && compatibleConnector(requiredPlug(nodeById(link.to)), required)).reduce((sum, link) => sum + connectionCost(nodeById(link.to)), 0);
     if (!capacity) return `Collegamento bloccato: ${from.title} non ha uscite ${cableById(required).name}.`;
     if (used >= capacity) return `Collegamento bloccato: le prese ${cableById(required).name} del quadro ${from.title} sono finite (${used}/${capacity}).`;
   }
   return '';
 }
 function showStatus(message = '') { $('#status-message').textContent = message; }
+function physicalIncomingLink(panel) { return state.links.find((link) => !isReferenceLink(link) && panelKey(nodeById(link.to)) === panelKey(panel)); }
+function supplyRootKey(node, visited = new Set()) {
+  if (!node || visited.has(node.id)) return null;
+  if (node.type === 'supply') return supplyKey(node);
+  if (node.type !== 'panel') return null;
+  visited.add(node.id); const incoming = physicalIncomingLink(node); return incoming ? supplyRootKey(nodeById(incoming.from), visited) : null;
+}
+function updatePanelNumbering(from, target) {
+  if (target?.type !== 'panel') return;
+  const root = supplyRootKey(from); if (!root) return;
+  uniquePanels().filter((panel) => supplyRootKey(panel) === root).forEach((panel, index) => {
+    panelGroup(panel).forEach((instance) => { if (/^Quadro #\d+$/.test(instance.title || '')) instance.title = `Quadro #${index + 1}`; });
+  });
+}
 function tryAddLink(fromId, toId, cable, length) {
   const from = nodeById(fromId), to = nodeById(toId); if (!from || !to || fromId === toId) return false;
   const warning = compatibilityWarning(from, to); if (warning) { showStatus(warning); return false; }
   if (!assignFirstFreeSocket(from, to)) return false;
   const lineCable = cable || requiredPlug(to) || 'cee16mono';
-  state.links.push({ id: uid(), from: fromId, to: toId, cable: lineCable, length: length || 20 }); showStatus(''); return true;
+  state.links.push({ id: uid(), from: fromId, to: toId, cable: lineCable, length: length || 20 }); updatePanelNumbering(from, to); showStatus(''); return true;
 }
 
 function render() {
@@ -192,7 +209,8 @@ function renderInspector() {
   const selected = node || link; $('.empty-state').hidden = !!selected; form.hidden = !selected; $('#delete-selected').hidden = !selected;
   if (!selected) return;
   if (link) {
-    form.innerHTML = `<label>Da<select name="from">${nodeOptions(link.from)}</select></label><label>A<select name="to">${nodeOptions(link.to)}</select></label><label>Linea<select name="cable">${cableOptions(link.cable)}</select></label><label>Lunghezza (m)<input name="length" type="number" min="0" step="0.5" value="${link.length}" /></label><span class="field-help">Puoi eliminare questo collegamento con il pulsante in alto.</span>`;
+    const from = nodeById(link.from), to = nodeById(link.to), reference = isReferenceLink(link);
+    form.innerHTML = `${reference ? `<div class="read-only">Collegamento richiamato: non impegna ulteriormente prese o ingressi.</div><label>Da<div class="read-only">${esc(from?.title || '—')}</div></label><label>A<div class="read-only">${esc(to?.title || '—')}</div></label>` : `<label>Da<select name="from">${nodeOptions(link.from)}</select></label><label>A<select name="to">${nodeOptions(link.to)}</select></label>`}<label>Linea<select name="cable">${cableOptions(link.cable)}</select></label><label>Lunghezza (m)<input name="length" type="number" min="0" step="0.5" value="${link.length}" /></label><span class="field-help">Puoi eliminare questo collegamento con il pulsante in alto.</span>`;
     return;
   }
   const hasIncoming = state.links.some((item) => item.to === node.id);
@@ -222,9 +240,10 @@ function openSupplyReferenceDialog() {
 function addSupplyReference() {
   const original = uniqueSupplies().find((supply) => supplyKey(supply) === $('#supply-reference-choice').value);
   if (!original) return;
+  original.supplyKey ||= original.id;
   const referencesOnPage = pageNodes().filter((node) => node.type === 'supply').length;
   const node = { ...original, id: uid(), page: state.currentPage, x: 90, y: 135 + referencesOnPage * 95, socket: '' };
-  state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#supply-reference-dialog').close(); render();
+  state.nodes.push(node); autoRecallConnections(); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#supply-reference-dialog').close(); render();
 }
 function openPanelReferenceDialog() {
   const panels = uniquePanels().filter((panel) => !pageNodes().some((node) => node.type === 'panel' && panelKey(node) === panelKey(panel)));
@@ -238,7 +257,42 @@ function addPanelReference() {
   original.panelKey ||= original.id;
   const position = panelPosition(pageNodes().filter((node) => node.type === 'panel').length);
   const node = { ...original, id: uid(), page: state.currentPage, x: position.x, y: position.y, socket: '' };
-  state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#panel-reference-dialog').close(); render();
+  state.nodes.push(node); autoRecallConnections(); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#panel-reference-dialog').close(); render();
+}
+function samePhysicalNode(first, second) {
+  if (!first || !second || first.type !== second.type) return false;
+  if (first.type === 'supply') return supplyKey(first) === supplyKey(second);
+  if (first.type === 'panel') return panelKey(first) === panelKey(second);
+  return first.id === second.id;
+}
+function linkReferenceCandidates() {
+  const nodes = pageNodes();
+  return state.links.filter((link) => !isReferenceLink(link)).map((link) => {
+    const originalFrom = nodeById(link.from), originalTo = nodeById(link.to);
+    const from = nodes.find((node) => samePhysicalNode(node, originalFrom)), to = nodes.find((node) => samePhysicalNode(node, originalTo));
+    return { link, originalFrom, originalTo, from, to };
+  }).filter((item) => item.from && item.to && item.from.id !== item.to.id && !state.links.some((link) => link.from === item.from.id && link.to === item.to.id));
+}
+function addLinkReferenceItem(item) {
+  if (!item) return null;
+  if (item.to.type === 'panel' && item.originalTo.socket) item.to.socket = item.originalTo.socket;
+  const link = { ...item.link, id: uid(), from: item.from.id, to: item.to.id, referenceLink: true, labelX: undefined, labelY: undefined };
+  state.links.push(link); return link;
+}
+function autoRecallConnections() {
+  linkReferenceCandidates().forEach((item) => addLinkReferenceItem(item));
+}
+function openLinkReferenceDialog() {
+  pendingLinkReferences = linkReferenceCandidates();
+  if (!pendingLinkReferences.length) return showStatus('Richiama prima nella pagina sia l’origine sia la destinazione del collegamento.');
+  $('#link-reference-choice').innerHTML = pendingLinkReferences.map((item, index) => `<option value="${index}">${esc(item.originalFrom.title)} → ${esc(item.originalTo.title)} · ${esc(cableById(item.link.cable).name)}</option>`).join('');
+  $('#link-reference-dialog').showModal();
+}
+function addLinkReference() {
+  const item = pendingLinkReferences[Number($('#link-reference-choice').value)];
+  if (!item) return;
+  const link = addLinkReferenceItem(item); if (!link) return;
+  $('#link-reference-dialog').close(); state.selectedLink = link.id; state.selected = null; state.selectedIds = []; render(); showStatus('Collegamento richiamato.');
 }
 function openBulkLoadDialog() {
   const panels = pageNodes().filter((node) => node.type === 'panel');
@@ -317,7 +371,7 @@ function createSocapexGroup() {
   const parentId = $('#socapex-parent').value, loadIds = [...document.querySelectorAll('[data-socapex-load]:checked')].map((input) => input.dataset.socapexLoad), parent = nodeById(parentId);
   if (!parent || !loadIds.length) return showStatus('Seleziona un quadro e almeno un’utenza.');
   if (loadIds.length > 6) return showStatus('Un Socapex può raggruppare al massimo 6 utenze CEE 16 A monofase.');
-  const capacity = (parent.ports || []).filter((port) => port.type === 'cee16mono').reduce((sum, port) => sum + port.quantity, 0), used = state.links.filter((link) => panelKey(nodeById(link.from)) === panelKey(parent) && requiredPlug(nodeById(link.to)) === 'cee16mono').length;
+  const capacity = (parent.ports || []).filter((port) => port.type === 'cee16mono').reduce((sum, port) => sum + port.quantity, 0), used = state.links.filter((link) => !isReferenceLink(link) && panelKey(nodeById(link.from)) === panelKey(parent) && requiredPlug(nodeById(link.to)) === 'cee16mono').length;
   if (used + loadIds.length > capacity) return showStatus(`Collegamento bloccato: le prese CEE 16 A monofase del quadro ${parent.title} non bastano (${used}/${capacity} già impegnate).`);
   const sockets = availablePanelSockets(parent, nodeById(loadIds[0]));
   if (sockets.length < loadIds.length) return showStatus(`Collegamento bloccato: non ci sono abbastanza prese CEE 16 A monofase libere sul quadro ${parent.title}.`);
@@ -339,7 +393,7 @@ function createBulkConnections() {
   targets.forEach((node) => requirements.set(requiredPlug(node), (requirements.get(requiredPlug(node)) || 0) + 1));
   if (parent.type === 'panel') {
     for (const [plug, count] of requirements) {
-      const capacity = (parent.ports || []).filter((port) => port.type === plug).reduce((sum, port) => sum + port.quantity, 0), used = state.links.filter((link) => panelKey(nodeById(link.from)) === panelKey(parent) && requiredPlug(nodeById(link.to)) === plug).length;
+      const capacity = (parent.ports || []).filter((port) => port.type === plug).reduce((sum, port) => sum + port.quantity, 0), used = state.links.filter((link) => !isReferenceLink(link) && panelKey(nodeById(link.from)) === panelKey(parent) && requiredPlug(nodeById(link.to)) === plug).length;
       if (used + count > capacity) return showStatus(`Collegamento bloccato: le prese ${cableById(plug).name} del quadro ${parent.title} non bastano (${used}/${capacity} già impegnate).`);
     }
   }
@@ -403,14 +457,26 @@ function coverMarkup() {
   const rows = [['Nome Evento', state.meta.name || '—'], ['Location', state.meta.location || '—'], ['Descrizione Allestimento', state.meta.type || '—'], ['Versione', state.meta.revision || '—'], ['Ditta esecutrice', company || '—']];
   return `<article class="cover-sheet"><div class="cover-heading">Schema unifilare di distribuzione elettrica</div><div class="cover-grid">${rows.map(([label, value]) => `<div class="cover-row"><div class="cover-label">${esc(label)}</div><div class="cover-value ${label === 'Ditta esecutrice' ? 'cover-company' : ''}">${esc(value)}</div></div>`).join('')}</div></article>`;
 }
-function indexMarkup(diagramPages) {
-  return `<article class="index-sheet"><div class="index-heading">Indice schemi unifilari</div><div class="index-event">${esc(state.meta.name || 'Nuovo progetto')}</div><div class="index-list">${diagramPages.map((page, index) => `<div><span>Pagina ${index + 3}</span><strong>Schema unifilare - pagina di lavoro ${page}</strong></div>`).join('')}</div></article>`;
+function titleBlockMarkup(page, total) {
+  return `<footer class="title-block"><div><small>Ditta esecutrice</small><strong>${esc(state.meta.company || '—')}</strong><span>${esc(state.meta.companyAddress || '—')}</span>${state.meta.companyVat ? `<span>P. IVA ${esc(state.meta.companyVat)}</span>` : ''}</div><div><small>Descrizione</small><strong>${esc(state.meta.type || '—')}</strong></div><div><small>Evento</small><strong>${esc(state.meta.name || '—')}</strong></div><div><small>Luogo</small><strong>${esc(state.meta.location || '—')}</strong></div><div><small>Versione</small><strong>${esc(state.meta.revision || '1.0')}</strong><small>Pagina ${page} di ${total}</small></div></footer>`;
+}
+function indexPageLines(page) {
+  const panels = state.nodes.filter((node) => node.page === page && node.type === 'panel').filter((node, index, nodes) => nodes.findIndex((item) => panelKey(item) === panelKey(node)) === index);
+  return [`Schema pagina ${page}`, ...panels.slice(0, 2).map((panel) => panel.title), panels.length > 2 ? `+ ${panels.length - 2} quadri` : ''];
+}
+function indexMarkup(diagramPages, total) {
+  const count = diagramPages.length, step = count === 1 ? 0 : Math.min(104, 530 / Math.max(1, count - 1)), startY = count === 1 ? 360 : 125, endY = startY + step * Math.max(0, count - 1), busX = 420;
+  const items = diagramPages.map((page, index) => {
+    const y = startY + index * step, lines = indexPageLines(page).filter(Boolean), panelX = 620, pageX = 1000, textStart = y - ((lines.length - 1) * 16) / 2 + 5;
+    return `<path class="index-connector" d="M${busX},${y} H${panelX}"/><rect class="index-node" x="${panelX}" y="${y - 35}" width="220" height="70"/>${lines.map((line, lineIndex) => `<text class="index-node-text ${lineIndex === 0 ? 'index-node-title' : ''}" x="${panelX + 110}" y="${textStart + lineIndex * 16}">${esc(line)}</text>`).join('')}<path class="index-connector" d="M${panelX + 220},${y} H${pageX}"/><rect class="index-page-box" x="${pageX}" y="${y - 27}" width="160" height="54"/><text class="index-page-text" x="${pageX + 80}" y="${y + 5}">Pagina ${index + 3}</text>`;
+  }).join('');
+  return `<article class="drawing-sheet index-sheet"><div class="drawing-title">Schema unifilare di distribuzione elettrica</div><svg class="index-diagram" viewBox="0 0 1200 780" aria-label="Indice schemi"><defs><marker id="index-arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#1c1c1c"/></marker></defs><rect class="index-node" x="70" y="${(startY + endY) / 2 - 38}" width="210" height="76"/><text class="index-node-text index-node-title" x="175" y="${(startY + endY) / 2 - 3}">Indice schemi</text><text class="index-node-text" x="175" y="${(startY + endY) / 2 + 17}">${esc(state.meta.name || 'Nuovo progetto')}</text><path class="index-bus" d="M280,${(startY + endY) / 2} H${busX} V${startY} M${busX},${startY} V${endY}"/>${items}</svg>${titleBlockMarkup(2, total)}</article>`;
 }
 function preparePrint() {
-  const currentPage = state.currentPage, printPages = $('#print-pages'), diagramPages = state.pages || [1], hasIndex = diagramPages.length > 1, pageOffset = hasIndex ? 2 : 1; printPages.innerHTML = coverMarkup() + (hasIndex ? indexMarkup(diagramPages) : '');
+  const currentPage = state.currentPage, printPages = $('#print-pages'), diagramPages = state.pages || [1], hasIndex = diagramPages.length > 1, pageOffset = hasIndex ? 2 : 1, totalPages = diagramPages.length + pageOffset, previousTitle = document.title; printPages.innerHTML = coverMarkup() + (hasIndex ? indexMarkup(diagramPages, totalPages) : '');
   diagramPages.forEach((page, index) => { state.currentPage = page; render(); const sheet = $('#drawing-sheet').cloneNode(true); sheet.removeAttribute('id'); sheet.classList.add('print-sheet'); sheet.querySelector('#block-page').textContent = `Pagina ${index + pageOffset + 1} di ${diagramPages.length + pageOffset}`; printPages.append(sheet); });
   state.currentPage = currentPage; render();
-  requestAnimationFrame(() => window.print());
+  document.title = `Unifilare ${state.meta.name || 'Progetto'} ${state.meta.revision || ''}`.trim(); window.addEventListener('afterprint', () => { document.title = previousTitle; }, { once: true }); requestAnimationFrame(() => window.print());
 }
 function svgPoint(event) { const svg = $('#diagram'), point = svg.createSVGPoint(); point.x = event.clientX; point.y = event.clientY; return point.matrixTransform(svg.getScreenCTM().inverse()); }
 function bindDiagram() {
@@ -448,7 +514,7 @@ function bind() {
   ['event-name', 'event-location', 'event-type', 'event-version'].forEach((id) => { const key = { 'event-name': 'name', 'event-location': 'location', 'event-type': 'type', 'event-version': 'revision' }[id]; $(`#${id}`).addEventListener('input', (event) => { state.meta[key] = event.target.value; render(); }); });
   $('#edit-company').onclick = () => { $('#company-name').value = state.meta.company || ''; $('#company-address').value = state.meta.companyAddress || ''; $('#company-vat').value = state.meta.companyVat || ''; $('#company-dialog').showModal(); };
   $('#confirm-company').onclick = (event) => { event.preventDefault(); state.meta.company = $('#company-name').value.trim(); state.meta.companyAddress = $('#company-address').value.trim(); state.meta.companyVat = $('#company-vat').value.trim(); $('#company-dialog').close(); render(); };
-  $('#add-supply').onclick = () => addNode('supply'); $('#reuse-supply').onclick = openSupplyReferenceDialog; $('#confirm-supply-reference').onclick = (event) => { event.preventDefault(); addSupplyReference(); }; $('#add-panel').onclick = openPanelDialog; $('#reuse-panel').onclick = openPanelReferenceDialog; $('#confirm-panel-reference').onclick = (event) => { event.preventDefault(); addPanelReference(); }; $('#add-temp-panel').onclick = openTemporaryPanelDialog; $('#group-socapex').onclick = openSocapexDialog; $('#add-load').onclick = () => addNode('load'); $('#add-bulk-loads').onclick = openBulkLoadDialog; $('#confirm-bulk-loads').onclick = (event) => { event.preventDefault(); addBulkLoads(); }; $('#add-link').onclick = showLinkDialog; $('#connect-selected').onclick = openBulkConnectDialog; $('#arrange-selected').onclick = openArrangeDialog; $('#panel-type').onchange = updatePanelMatricolaChoices; $('#panel-choice').onchange = updatePanelChoiceDetails; $('#panel-mode').onchange = updatePanelModeDetails; $('#confirm-panel').onclick = (event) => { event.preventDefault(); addPanelFromLibrary($('#panel-choice').value); };
+  $('#add-supply').onclick = () => addNode('supply'); $('#reuse-supply').onclick = openSupplyReferenceDialog; $('#confirm-supply-reference').onclick = (event) => { event.preventDefault(); addSupplyReference(); }; $('#add-panel').onclick = openPanelDialog; $('#reuse-panel').onclick = openPanelReferenceDialog; $('#confirm-panel-reference').onclick = (event) => { event.preventDefault(); addPanelReference(); }; $('#reuse-link').onclick = openLinkReferenceDialog; $('#confirm-link-reference').onclick = (event) => { event.preventDefault(); addLinkReference(); }; $('#add-temp-panel').onclick = openTemporaryPanelDialog; $('#group-socapex').onclick = openSocapexDialog; $('#add-load').onclick = () => addNode('load'); $('#add-bulk-loads').onclick = openBulkLoadDialog; $('#confirm-bulk-loads').onclick = (event) => { event.preventDefault(); addBulkLoads(); }; $('#add-link').onclick = showLinkDialog; $('#connect-selected').onclick = openBulkConnectDialog; $('#arrange-selected').onclick = openArrangeDialog; $('#panel-type').onchange = updatePanelMatricolaChoices; $('#panel-choice').onchange = updatePanelChoiceDetails; $('#panel-mode').onchange = updatePanelModeDetails; $('#confirm-panel').onclick = (event) => { event.preventDefault(); addPanelFromLibrary($('#panel-choice').value); };
   $('#add-temporary-port').onclick = () => { temporaryPorts.push({ type: 'cee16mono', quantity: 1 }); renderTemporaryPorts(); };
   $('#temporary-panel-ports').addEventListener('input', (event) => { const typeIndex = event.target.dataset.portType, quantityIndex = event.target.dataset.portQuantity; if (typeIndex !== undefined) temporaryPorts[Number(typeIndex)].type = event.target.value; if (quantityIndex !== undefined) temporaryPorts[Number(quantityIndex)].quantity = Math.max(1, Number(event.target.value) || 1); });
   $('#temporary-panel-ports').addEventListener('click', (event) => { const removeIndex = event.target.dataset.removePort; if (removeIndex !== undefined) { temporaryPorts.splice(Number(removeIndex), 1); renderTemporaryPorts(); } });
@@ -459,9 +525,9 @@ function bind() {
   $('#socapex-select-all').onclick = () => document.querySelectorAll('[data-socapex-load]').forEach((input) => { input.checked = true; }); $('#socapex-select-none').onclick = () => document.querySelectorAll('[data-socapex-load]').forEach((input) => { input.checked = false; }); $('#socapex-prefix-actions').onclick = (event) => { const prefix = event.target.dataset.socapexPrefix; if (!prefix) return; document.querySelectorAll('[data-socapex-load]').forEach((input) => { input.checked = circuitPrefix(nodeById(input.dataset.socapexLoad)?.title) === prefix; }); }; $('#bulk-connect-select-all').onclick = () => document.querySelectorAll('[data-bulk-connect-load]').forEach((input) => { input.checked = true; }); $('#bulk-connect-select-none').onclick = () => document.querySelectorAll('[data-bulk-connect-load]').forEach((input) => { input.checked = false; });
   $('#previous-page').onclick = () => { state.currentPage = Math.max(1, state.currentPage - 1); render(); }; $('#next-page').onclick = () => { state.currentPage = Math.min(pagesCount(), state.currentPage + 1); render(); }; $('#new-page').onclick = () => { const page = pagesCount() + 1; state.pages.push(page); state.currentPage = page; render(); };
   $('#property-form').addEventListener('input', (event) => { const node = nodeById(state.selected); if (!node || ['socket', 'manualSocket'].includes(event.target.name)) return; const value = ['page', 'watts'].includes(event.target.name) ? Number(event.target.value) : event.target.value, sharedFields = ['title', 'subtitle', 'details']; const sharedNodes = node.type === 'supply' && [...sharedFields, 'supplyType'].includes(event.target.name) ? supplyGroup(node) : node.type === 'panel' && sharedFields.includes(event.target.name) ? panelGroup(node) : [node]; sharedNodes.forEach((item) => { item[event.target.name] = value; if (event.target.name === 'supplyType') item.subtitle = cableById(item.supplyType).plug; }); if (event.target.name === 'watts') node.details = `Assorbimento ${(node.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`; if (event.target.name === 'plugType') node.subtitle = cableById(node.plugType).plug; });
-  $('#property-form').addEventListener('change', (event) => { const link = linkById(state.selectedLink), node = nodeById(state.selected); if (link) { const before = { ...link }, target = nodeById(link.to), previousSocket = target?.socket || '', changesEndpoint = ['from', 'to'].includes(event.target.name); link[event.target.name] = event.target.name === 'length' ? Number(event.target.value) : event.target.value; if (changesEndpoint && target) target.socket = ''; const warning = compatibilityWarning(nodeById(link.from), nodeById(link.to), link.id); if (warning || (changesEndpoint && !assignFirstFreeSocket(nodeById(link.from), nodeById(link.to)))) { Object.assign(link, before); if (target) target.socket = previousSocket; if (warning) showStatus(warning); } else showStatus(''); } if (node && ['socket', 'manualSocket'].includes(event.target.name)) { const incoming = state.links.find((item) => item.to === node.id), source = incoming && nodeById(incoming.from), proposed = event.target.value.trim().toUpperCase(), warning = socketWarning(source, node, proposed, incoming?.id); if (warning) showStatus(warning); else { node.socket = proposed; showStatus(''); } } if (node) { const invalid = state.links.map((item) => ({ item, warning: compatibilityWarning(nodeById(item.from), nodeById(item.to), item.id) })).find((result) => result.warning), incoming = state.links.find((item) => item.to === node.id), socketIssue = incoming ? socketWarning(nodeById(incoming.from), node, node.socket, incoming.id) : ''; showStatus(invalid?.warning || socketIssue || ''); } render(); });
+  $('#property-form').addEventListener('change', (event) => { const link = linkById(state.selectedLink), node = nodeById(state.selected); if (link) { const before = { ...link }, target = nodeById(link.to), previousSocket = target?.socket || '', changesEndpoint = ['from', 'to'].includes(event.target.name); link[event.target.name] = event.target.name === 'length' ? Number(event.target.value) : event.target.value; if (changesEndpoint && target) target.socket = ''; const warning = isReferenceLink(link) ? '' : compatibilityWarning(nodeById(link.from), nodeById(link.to), link.id); if (warning || (!isReferenceLink(link) && changesEndpoint && !assignFirstFreeSocket(nodeById(link.from), nodeById(link.to)))) { Object.assign(link, before); if (target) target.socket = previousSocket; if (warning) showStatus(warning); } else showStatus(''); } if (node && ['socket', 'manualSocket'].includes(event.target.name)) { const incoming = state.links.find((item) => item.to === node.id), source = incoming && nodeById(incoming.from), proposed = event.target.value.trim().toUpperCase(), warning = socketWarning(source, node, proposed, incoming?.id); if (warning) showStatus(warning); else { node.socket = proposed; showStatus(''); } } if (node) { const invalid = state.links.filter((item) => !isReferenceLink(item)).map((item) => ({ item, warning: compatibilityWarning(nodeById(item.from), nodeById(item.to), item.id) })).find((result) => result.warning), incoming = state.links.find((item) => item.to === node.id), socketIssue = incoming ? socketWarning(nodeById(incoming.from), node, node.socket, incoming.id) : ''; showStatus(invalid?.warning || socketIssue || ''); } render(); });
   $('#property-form').addEventListener('click', (event) => { if (event.target.id === 'edit-temporary-panel') { const node = nodeById(state.selected); if (node) openTemporaryPanelDialog(node); } if (event.target.id === 'unlink-selected') { state.links.filter((link) => link.to === state.selected).forEach((link) => { const target = nodeById(link.to); if (target) target.socket = ''; }); state.links = state.links.filter((link) => link.to !== state.selected); render(); } });
-  $('#delete-selected').onclick = () => { if (state.selectedLink) { const link = linkById(state.selectedLink), target = link && nodeById(link.to); if (target) target.socket = ''; state.links = state.links.filter((item) => item.id !== state.selectedLink); state.selectedLink = null; } else if (state.selected) { const deletedIds = state.selectedIds.length > 1 ? state.selectedIds : [state.selected]; state.links = state.links.filter((link) => !deletedIds.includes(link.from) && !deletedIds.includes(link.to)); state.nodes = state.nodes.filter((node) => !deletedIds.includes(node.id)); state.selected = null; state.selectedIds = []; } render(); };
+  $('#delete-selected').onclick = () => { if (state.selectedLink) { const link = linkById(state.selectedLink), target = link && nodeById(link.to); if (target && !isReferenceLink(link)) target.socket = ''; state.links = state.links.filter((item) => item.id !== state.selectedLink); state.selectedLink = null; } else if (state.selected) { const deletedIds = state.selectedIds.length > 1 ? state.selectedIds : [state.selected]; state.links = state.links.filter((link) => !deletedIds.includes(link.from) && !deletedIds.includes(link.to)); state.nodes = state.nodes.filter((node) => !deletedIds.includes(node.id)); state.selected = null; state.selectedIds = []; } render(); };
   $('#capture-file').addEventListener('change', (event) => event.target.files[0]?.text().then(prepareCaptureImport)); $('#welcome-capture-file').addEventListener('change', (event) => event.target.files[0]?.text().then(prepareCaptureImport)); $('#welcome-add-supply').onclick = () => { $('#welcome-dialog').close(); addNode('supply'); }; $('#confirm-capture-import').onclick = (event) => { event.preventDefault(); importSelectedCaptureGroups(); }; $('#capture-select-all').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = true; }); $('#capture-select-none').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = false; }); $('#capture-prefix-actions').onclick = (event) => { const prefix = event.target.dataset.capturePrefix; if (!prefix) return; document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = circuitPrefix(pendingCaptureGroups[Number(input.dataset.captureIndex)].circuit) === prefix; }); };
   $('#confirm-link').onclick = (event) => { event.preventDefault(); const from = $('#link-from').value, to = $('#link-to').value; if (from === to) return alert('Scegli due elementi diversi.'); if (tryAddLink(from, to, $('#link-cable').value, Number($('#link-length').value) || 0)) $('#link-dialog').close(); render(); };
   $('#save-project').onclick = save; $('#print-project').onclick = preparePrint; $('#open-project').addEventListener('change', (event) => event.target.files[0]?.text().then((text) => { const loaded = JSON.parse(text); migrateLegacySocapex(loaded); migrateSupplyReferences(loaded); migratePanelReferences(loaded); migratePowerLockSupplyTypes(loaded); state = { ...loaded, meta: { company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '', ...loaded.meta }, pages: loaded.pages || Array.from({ length: Math.max(1, ...loaded.nodes.map((node) => node.page)) }, (_, index) => index + 1), library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null }; const ids = { name: 'event-name', location: 'event-location', type: 'event-type', revision: 'event-version' }; Object.entries(ids).forEach(([key, id]) => { $(`#${id}`).value = state.meta[key] || ''; }); $('#welcome-dialog').close(); render(); }));
