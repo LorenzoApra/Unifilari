@@ -80,7 +80,7 @@ function cablePlugLabel(cable) { return cable.plug.replace(/^CEE\s+/, '').replac
 function cableShortLabel(cable) { return cable.name.replace(/ monofase| trifase/gi, '').replace(/ (\d+) A$/, ' $1A'); }
 function linkLabel(link) {
   const cable = cableById(link.cable);
-  if (isPowerLock(cable.id)) return ['Collegamento tramite', 'Cavo singolo polo PowerLock', `Lunghezza linea ${link.length || 0} metri`];
+  if (isPowerLock(cable.id)) return ['Cavo singolo polo PowerLock', `Lunghezza linea ${link.length || 0} metri`];
   if (cable.id === 'socapex') return [`Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri`];
   return [cableShortLabel(cable), `Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri`];
 }
