@@ -50,6 +50,7 @@
             <button id="add-link">Collegamento</button>
             <button id="connect-selected">Collega selezionati</button>
             <button id="arrange-selected">Ordina selezionati</button>
+            <button id="align-selected">Allinea selezionati</button>
           </div>
         </section>
 
@@ -212,6 +213,14 @@
         <label id="arrange-reference-row" hidden>Elemento di riferimento<select id="arrange-reference"></select></label>
         <p class="help">Gli elementi vengono disposti in una griglia ordinata senza sovrapposizioni.</p>
         <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-arrange" value="default">Ordina</button></menu>
+      </form>
+    </dialog>
+    <dialog id="align-dialog">
+      <form method="dialog">
+        <h2>Allinea elementi selezionati</h2>
+        <label>Allineamento<select id="align-mode"><option value="left">A sinistra</option><option value="center-x">Al centro verticale</option><option value="right">A destra</option><option value="top">In alto</option><option value="center-y">Al centro orizzontale</option><option value="bottom">In basso</option></select></label>
+        <p class="help">Durante il trascinamento compaiono anche guide magnetiche rispetto agli altri blocchi.</p>
+        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-align" value="default">Allinea</button></menu>
       </form>
     </dialog>
     <dialog id="company-dialog">
