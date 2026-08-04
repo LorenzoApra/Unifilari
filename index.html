@@ -179,6 +179,8 @@
         <h2>Importa circuiti da Capture</h2>
         <label>Collega i circuiti selezionati a<select id="capture-parent"></select></label>
         <p class="help">Puoi scegliere un quadro già presente, oppure importare senza collegare.</p>
+        <label class="inline-option"><input id="capture-use-socapex" type="checkbox" /><span>Collega tramite Socapex quando possibile</span></label>
+        <p id="capture-socapex-help" class="help">I circuiti CEE 16 A monofase saranno raggruppati automaticamente, fino a 6 per ogni Socapex.</p>
         <div class="bulk-selection-actions"><button type="button" id="capture-select-all">Seleziona tutte</button><button type="button" id="capture-select-none">Nessuna</button></div>
         <div id="capture-prefix-actions" class="bulk-selection-actions"></div>
         <div id="capture-circuit-list" class="capture-circuit-list"></div>

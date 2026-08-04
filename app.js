@@ -351,14 +351,36 @@ function prepareCaptureImport(text) {
 function renderCaptureImportDialog() {
   const targets = pageNodes().filter((node) => node.type === 'panel');
   $('#capture-parent').innerHTML = `<option value="">Non collegare ora</option>${targets.map((node) => `<option value="${node.id}">Quadro: ${esc(node.title)}${node.details ? ` (${esc(node.details)})` : ''}</option>`).join('')}`;
+  $('#capture-use-socapex').checked = false; updateCaptureSocapexAvailability();
   const prefixes = [...new Set(pendingCaptureGroups.map((group) => circuitPrefix(group.circuit)))];
   $('#capture-prefix-actions').innerHTML = prefixes.map((prefix) => `<button type="button" data-capture-prefix="${esc(prefix)}">Solo ${esc(prefix)}</button>`).join('');
   $('#capture-circuit-list').innerHTML = pendingCaptureGroups.map((group, index) => `<label class="capture-circuit"><input type="checkbox" data-capture-index="${index}" checked /><span><strong>Circuito ${esc(group.circuit)}</strong><br />${group.fixtures.length} fixture - ${(group.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW</span></label>`).join('');
 }
+function updateCaptureSocapexAvailability() {
+  const enabled = !!$('#capture-parent').value;
+  $('#capture-use-socapex').disabled = !enabled;
+  if (!enabled) $('#capture-use-socapex').checked = false;
+  $('#capture-socapex-help').textContent = enabled ? 'I circuiti CEE 16 A monofase saranno raggruppati automaticamente, fino a 6 per ogni Socapex.' : 'Scegli prima un quadro per attivare il collegamento tramite Socapex.';
+}
+function connectLoadsAsSocapex(parentId, loadIds, length = 20) {
+  const parent = nodeById(parentId), eligibleIds = loadIds.filter((id) => { const load = nodeById(id); return load?.type === 'load' && load.plugType === 'cee16mono' && !state.links.some((link) => !isReferenceLink(link) && link.to === id); });
+  if (!parent || parent.type !== 'panel') return { linked: 0, groups: 0 };
+  let linked = 0, groups = 0;
+  for (let offset = 0; offset < eligibleIds.length;) {
+    const target = nodeById(eligibleIds[offset]), sockets = availablePanelSockets(parent, target);
+    if (!sockets.length) break;
+    const groupIds = eligibleIds.slice(offset, offset + Math.min(6, sockets.length)), groupId = uid();
+    groupIds.forEach((loadId, index) => { const load = nodeById(loadId); load.socket = sockets[index].name; state.links.push({ id: uid(), from: parentId, to: loadId, cable: 'socapex', length, socapexGroup: groupId }); });
+    linked += groupIds.length; groups++; offset += groupIds.length;
+  }
+  return { linked, groups };
+}
 function importSelectedCaptureGroups() {
-  const selected = [...document.querySelectorAll('[data-capture-index]:checked')].map((input) => pendingCaptureGroups[Number(input.dataset.captureIndex)]), parent = $('#capture-parent').value; let index = pageNodes().filter((node) => node.type === 'load').length, linked = 0; const importedIds = [];
-  selected.forEach((group) => { index++; const node = { id: uid(), type: 'load', page: state.currentPage, x: 835, y: Math.min(650, 120 + index * 75), title: `Circuito ${group.circuit}`, subtitle: CABLES[0].plug, plugType: 'cee16mono', details: `Assorbimento ${(group.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`, socket: '', watts: group.watts, fixtures: group.fixtures }; state.nodes.push(node); importedIds.push(node.id); if (parent && tryAddLink(parent, node.id, 'cee16mono', 20)) linked++; });
-  arrangeNodes(pageNodes().filter((node) => node.type === 'load'), 850); $('#capture-import-dialog').close(); state.selectedIds = importedIds; state.selected = importedIds.at(-1) || null; render(); showStatus(`Importati ${selected.length} circuiti${parent ? `, collegati ${linked}` : ''}.`);
+  const selected = [...document.querySelectorAll('[data-capture-index]:checked')].map((input) => pendingCaptureGroups[Number(input.dataset.captureIndex)]), parent = $('#capture-parent').value, useSocapex = parent && $('#capture-use-socapex').checked; let index = pageNodes().filter((node) => node.type === 'load').length, linked = 0, socapexGroups = 0; const importedIds = [];
+  selected.forEach((group) => { index++; const node = { id: uid(), type: 'load', page: state.currentPage, x: 835, y: Math.min(650, 120 + index * 75), title: `Circuito ${group.circuit}`, subtitle: CABLES[0].plug, plugType: 'cee16mono', details: `Assorbimento ${(group.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`, socket: '', watts: group.watts, fixtures: group.fixtures }; state.nodes.push(node); importedIds.push(node.id); });
+  if (useSocapex) ({ linked, groups: socapexGroups } = connectLoadsAsSocapex(parent, importedIds));
+  else if (parent) importedIds.forEach((id) => { if (tryAddLink(parent, id, 'cee16mono', 20)) linked++; });
+  arrangeNodes(pageNodes().filter((node) => node.type === 'load'), 850); $('#capture-import-dialog').close(); state.selectedIds = importedIds; state.selected = importedIds.at(-1) || null; render(); showStatus(`Importati ${selected.length} circuiti${parent ? `, collegati ${linked}${useSocapex ? ` in ${socapexGroups} Socapex` : ''}` : ''}${parent && linked < selected.length ? `; ${selected.length - linked} senza collegamento per mancanza di prese libere` : ''}.`);
 }
 function openSocapexDialog() {
   const panels = pageNodes().filter((node) => node.type === 'panel');
@@ -378,8 +400,7 @@ function createSocapexGroup() {
   if (used + loadIds.length > capacity) return showStatus(`Collegamento bloccato: le prese CEE 16 A monofase del quadro ${parent.title} non bastano (${used}/${capacity} già impegnate).`);
   const sockets = availablePanelSockets(parent, nodeById(loadIds[0]));
   if (sockets.length < loadIds.length) return showStatus(`Collegamento bloccato: non ci sono abbastanza prese CEE 16 A monofase libere sul quadro ${parent.title}.`);
-  const groupId = uid();
-  loadIds.forEach((loadId, index) => { const target = nodeById(loadId); target.socket = sockets[index].name; state.links.push({ id: uid(), from: parentId, to: loadId, cable: 'socapex', length: 20, socapexGroup: groupId }); });
+  connectLoadsAsSocapex(parentId, loadIds);
   $('#socapex-dialog').close(); state.selected = loadIds.at(-1); state.selectedIds = loadIds; state.selectedLink = null; render(); showStatus(`Creato Socapex unico per ${loadIds.length} utenz${loadIds.length === 1 ? 'a' : 'e'}.`);
 }
 function openBulkConnectDialog() {
@@ -484,21 +505,65 @@ function coverMarkup() {
 function titleBlockMarkup(page, total) {
   return `<footer class="title-block"><div><small>Ditta esecutrice</small><strong>${esc(state.meta.company || '—')}</strong><span>${esc(state.meta.companyAddress || '—')}</span>${state.meta.companyVat ? `<span>P. IVA ${esc(state.meta.companyVat)}</span>` : ''}</div><div><small>Descrizione</small><strong>${esc(state.meta.type || '—')}</strong></div><div><small>Evento</small><strong>${esc(state.meta.name || '—')}</strong></div><div><small>Luogo</small><strong>${esc(state.meta.location || '—')}</strong></div><div><small>Versione</small><strong>${esc(state.meta.revision || '1.0')}</strong><small>Pagina ${page} di ${total}</small></div></footer>`;
 }
-function indexPageLines(page) {
-  const panels = state.nodes.filter((node) => node.page === page && node.type === 'panel').filter((node, index, nodes) => nodes.findIndex((item) => panelKey(item) === panelKey(node)) === index);
-  return [`Schema pagina ${page}`, ...panels.slice(0, 2).map((panel) => panel.title), panels.length > 2 ? `+ ${panels.length - 2} quadri` : ''];
-}
 function splitIntoPages(items, size) { return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size)); }
-function indexMarkup(entries, indexPage, total, diagramOffset, indexTotal) {
-  const count = entries.length, step = count === 1 ? 0 : 140, startY = count === 1 ? 360 : 155, endY = startY + step * Math.max(0, count - 1), busX = 420;
-  const items = entries.map((entry, index) => {
-    const y = startY + index * step, lines = indexPageLines(entry.page).filter(Boolean), panelX = 620, pageX = 1000, textStart = y - ((lines.length - 1) * 17) / 2 + 5;
-    return `<path class="index-connector" marker-end="url(#index-arrow-${indexPage})" d="M${busX},${y} H${panelX}"/><rect class="index-node" x="${panelX}" y="${y - 46}" width="240" height="92"/>${lines.map((line, lineIndex) => `<text class="index-node-text ${lineIndex === 0 ? 'index-node-title' : ''}" x="${panelX + 120}" y="${textStart + lineIndex * 17}">${esc(line)}</text>`).join('')}<path class="index-connector" marker-end="url(#index-arrow-${indexPage})" d="M${panelX + 240},${y} H${pageX}"/><rect class="index-page-box" x="${pageX}" y="${y - 30}" width="160" height="60"/><text class="index-page-text" x="${pageX + 80}" y="${y + 5}">Pagina ${diagramOffset + entry.index + 1}</text>`;
+function topologyNodeKey(node) {
+  if (node?.type === 'supply') return `supply:${supplyKey(node)}`;
+  if (node?.type === 'panel') return `panel:${panelKey(node)}`;
+  return '';
+}
+function indexTopology(diagramPages) {
+  const canonical = new Map([...uniqueSupplies(), ...uniquePanels()].map((node) => [topologyNodeKey(node), node])), physicalLinks = state.links.filter((link) => !isReferenceLink(link)).map((link) => ({ link, from: nodeById(link.from), to: nodeById(link.to) })).filter(({ from, to }) => ['supply', 'panel'].includes(from?.type) && to?.type === 'panel'), parentByKey = new Map(), childKeys = new Set(), physicalIds = new Set();
+  physicalLinks.forEach(({ from, to }) => { const fromKey = topologyNodeKey(from), toKey = topologyNodeKey(to); canonical.set(fromKey, from); canonical.set(toKey, to); parentByKey.set(toKey, fromKey); childKeys.add(fromKey); physicalIds.add(from.id); physicalIds.add(to.id); });
+  const pathFor = (key) => {
+    const path = [], visited = new Set(); let current = key;
+    while (current && !visited.has(current)) { visited.add(current); path.unshift(current); current = parentByKey.get(current); }
+    return path;
+  };
+  let entries = [];
+  uniquePanels().forEach((panel) => {
+    const key = topologyNodeKey(panel), instances = panelGroup(panel).sort((first, second) => first.page - second.page), physical = instances.find((node) => physicalIds.has(node.id)) || instances[0], referencePages = [...new Set(instances.filter((node) => node.id !== physical.id).map((node) => node.page))], destinationPages = referencePages.length ? referencePages : (!childKeys.has(key) ? [physical.page] : []);
+    destinationPages.filter((page) => diagramPages.includes(page)).forEach((page) => entries.push({ panelKey: key, page, path: pathFor(key) }));
+  });
+  if (!entries.length) {
+    diagramPages.forEach((page) => {
+      const pagePanels = state.nodes.filter((node) => node.page === page && node.type === 'panel'), leaves = pagePanels.filter((node) => !childKeys.has(topologyNodeKey(node))), candidates = leaves.length ? leaves : pagePanels.slice(-1);
+      candidates.forEach((panel) => { const key = topologyNodeKey(panel); entries.push({ panelKey: key, page, path: pathFor(key) }); });
+    });
+  }
+  entries = entries.filter((entry, index, list) => entry.path.length && list.findIndex((item) => item.panelKey === entry.panelKey && item.page === entry.page) === index).sort((first, second) => first.page - second.page || (canonical.get(first.panelKey)?.title || '').localeCompare(canonical.get(second.panelKey)?.title || '', 'it', { numeric: true }));
+  const roots = new Map();
+  entries.forEach((entry) => { const root = entry.path[0]; if (!roots.has(root)) roots.set(root, []); roots.get(root).push(entry); });
+  const groups = [...roots.entries()].flatMap(([rootKey, rootEntries]) => splitIntoPages(rootEntries, 4).map((items) => ({ rootKey, entries: items })));
+  return { canonical, parentByKey, groups };
+}
+function indexNodeLines(node) {
+  if (!node) return [];
+  const values = node.type === 'supply' ? [node.title, node.subtitle || node.details] : [node.title, node.socket ? `Presa ${node.socket}` : node.subtitle, node.socket ? node.subtitle : node.details, node.socket ? node.details : ''];
+  return values.filter(Boolean).flatMap((value) => wrapText(value, node.type === 'supply' ? 22 : 25));
+}
+function indexMarkup(group, topology, indexPage, total, diagramOffset, indexTotal, diagramPages) {
+  const entries = group.entries, count = entries.length, startY = count === 1 ? 365 : 130, step = count === 1 ? 0 : Math.min(165, 520 / (count - 1)), rowByEntry = new Map(entries.map((entry, index) => [entry, startY + index * step])), usedKeys = [...new Set(entries.flatMap((entry) => entry.path))], maxDepth = Math.max(1, ...entries.map((entry) => entry.path.length - 1)), centers = new Map();
+  usedKeys.forEach((key) => {
+    const rows = entries.filter((entry) => entry.path.includes(key)).map((entry) => rowByEntry.get(entry)), depth = Math.max(...entries.filter((entry) => entry.path.includes(key)).map((entry) => entry.path.indexOf(key)));
+    centers.set(key, { x: 120 + (depth * 650) / maxDepth, y: rows.reduce((sum, value) => sum + value, 0) / rows.length });
+  });
+  const dimensions = new Map(usedKeys.map((key) => { const node = topology.canonical.get(key), lines = indexNodeLines(node); return [key, { width: node?.type === 'supply' ? 170 : 190, height: Math.max(62, lines.length * 17 + 18), lines }]; }));
+  const edges = new Map();
+  entries.forEach((entry) => entry.path.slice(1).forEach((key, index) => edges.set(`${entry.path[index]}→${key}`, [entry.path[index], key])));
+  const edgeMarkup = [...edges.values()].map(([fromKey, toKey]) => { const from = centers.get(fromKey), to = centers.get(toKey), fromSize = dimensions.get(fromKey), toSize = dimensions.get(toKey), middleX = (from.x + fromSize.width / 2 + to.x - toSize.width / 2) / 2; return `<path class="index-connector" marker-end="url(#index-arrow-${indexPage})" d="M${from.x + fromSize.width / 2},${from.y} H${middleX} V${to.y} H${to.x - toSize.width / 2}"/>`; }).join('');
+  const nodeMarkup = usedKeys.map((key) => {
+    const node = topology.canonical.get(key), center = centers.get(key), size = dimensions.get(key), textStart = center.y - ((size.lines.length - 1) * 17) / 2 + 5;
+    return `<rect class="index-node" x="${center.x - size.width / 2}" y="${center.y - size.height / 2}" width="${size.width}" height="${size.height}"/>${size.lines.map((line, lineIndex) => `<text class="index-node-text ${lineIndex === 0 ? 'index-node-title' : ''}" x="${center.x}" y="${textStart + lineIndex * 17}">${esc(line)}</text>`).join('')}`;
   }).join('');
-  return `<article class="drawing-sheet index-sheet"><div class="drawing-title">Schema unifilare di distribuzione elettrica</div><svg class="index-diagram" viewBox="0 0 1200 780" aria-label="Indice schemi"><defs><marker id="index-arrow-${indexPage}" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#1c1c1c"/></marker></defs><rect class="index-node" x="70" y="${(startY + endY) / 2 - 42}" width="230" height="84"/><text class="index-node-text index-node-title" x="185" y="${(startY + endY) / 2 - 5}">Indice schemi</text><text class="index-node-text" x="185" y="${(startY + endY) / 2 + 17}">${esc(state.meta.name || 'Nuovo progetto')}</text><text class="index-node-text" x="185" y="${(startY + endY) / 2 + 35}">Parte ${indexPage - 1} di ${indexTotal}</text><path class="index-bus" d="M300,${(startY + endY) / 2} H${busX} V${startY} M${busX},${startY} V${endY}"/>${items}</svg>${titleBlockMarkup(indexPage, total)}</article>`;
+  const pageX = 1080, pageWidth = 130, pageMarkup = entries.map((entry) => {
+    const center = centers.get(entry.panelKey), size = dimensions.get(entry.panelKey), y = rowByEntry.get(entry), middleX = Math.max(center.x + size.width / 2 + 22, 935), diagramIndex = diagramPages.indexOf(entry.page), printedPage = diagramOffset + diagramIndex + 1;
+    return `<path class="index-connector" marker-end="url(#index-arrow-${indexPage})" d="M${center.x + size.width / 2},${center.y} H${middleX} V${y} H${pageX - pageWidth / 2}"/><rect class="index-page-box" x="${pageX - pageWidth / 2}" y="${y - 30}" width="${pageWidth}" height="60"/><text class="index-page-text" x="${pageX}" y="${y + 5}">Pagina ${printedPage}</text>`;
+  }).join('');
+  const part = indexTotal > 1 ? ` · Parte ${indexPage - 1} di ${indexTotal}` : '';
+  return `<article class="drawing-sheet index-sheet"><div class="drawing-title">Schema unifilare di distribuzione elettrica</div><svg class="index-diagram" viewBox="0 0 1200 780" aria-label="Indice schemi"><defs><marker id="index-arrow-${indexPage}" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#1c1c1c"/></marker></defs><text class="index-caption" x="28" y="34">Indice schemi${part}</text>${edgeMarkup}${pageMarkup}${nodeMarkup}</svg>${titleBlockMarkup(indexPage, total)}</article>`;
 }
 function preparePrint() {
-  const currentPage = state.currentPage, printPages = $('#print-pages'), diagramPages = state.pages || [1], hasIndex = diagramPages.length > 1, indexGroups = hasIndex ? splitIntoPages(diagramPages.map((page, index) => ({ page, index })), 4) : [], pageOffset = 1 + indexGroups.length, totalPages = diagramPages.length + pageOffset, previousTitle = document.title; printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, index + 2, totalPages, pageOffset, indexGroups.length)).join('');
+  const currentPage = state.currentPage, printPages = $('#print-pages'), diagramPages = state.pages || [1], hasIndex = diagramPages.length > 1, topology = indexTopology(diagramPages), indexGroups = hasIndex ? topology.groups : [], pageOffset = 1 + indexGroups.length, totalPages = diagramPages.length + pageOffset, previousTitle = document.title; printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, topology, index + 2, totalPages, pageOffset, indexGroups.length, diagramPages)).join('');
   diagramPages.forEach((page, index) => { state.currentPage = page; render(); const sheet = $('#drawing-sheet').cloneNode(true); sheet.removeAttribute('id'); sheet.classList.add('print-sheet'); sheet.querySelector('#block-page').textContent = `Pagina ${index + pageOffset + 1} di ${diagramPages.length + pageOffset}`; printPages.append(sheet); });
   state.currentPage = currentPage; render();
   document.title = `Unifilare ${state.meta.name || 'Progetto'} ${state.meta.revision || ''}`.trim(); window.addEventListener('afterprint', () => { document.title = previousTitle; }, { once: true }); requestAnimationFrame(() => window.print());
@@ -559,7 +624,7 @@ function bind() {
   $('#property-form').addEventListener('change', (event) => { const link = linkById(state.selectedLink), node = nodeById(state.selected); if (link) { const before = { ...link }, target = nodeById(link.to), previousSocket = target?.socket || '', changesEndpoint = ['from', 'to'].includes(event.target.name); link[event.target.name] = event.target.name === 'length' ? Number(event.target.value) : event.target.value; if (changesEndpoint && target) target.socket = ''; const warning = isReferenceLink(link) ? '' : compatibilityWarning(nodeById(link.from), nodeById(link.to), link.id); if (warning || (!isReferenceLink(link) && changesEndpoint && !assignFirstFreeSocket(nodeById(link.from), nodeById(link.to)))) { Object.assign(link, before); if (target) target.socket = previousSocket; if (warning) showStatus(warning); } else showStatus(''); } if (node && ['socket', 'manualSocket'].includes(event.target.name)) { const incoming = state.links.find((item) => item.to === node.id), source = incoming && nodeById(incoming.from), proposed = event.target.value.trim().toUpperCase(), warning = socketWarning(source, node, proposed, incoming?.id); if (warning) showStatus(warning); else { node.socket = proposed; showStatus(''); } } if (node) { const invalid = state.links.filter((item) => !isReferenceLink(item)).map((item) => ({ item, warning: compatibilityWarning(nodeById(item.from), nodeById(item.to), item.id) })).find((result) => result.warning), incoming = state.links.find((item) => item.to === node.id), socketIssue = incoming ? socketWarning(nodeById(incoming.from), node, node.socket, incoming.id) : ''; showStatus(invalid?.warning || socketIssue || ''); } render(); });
   $('#property-form').addEventListener('click', (event) => { if (event.target.id === 'edit-temporary-panel') { const node = nodeById(state.selected); if (node) openTemporaryPanelDialog(node); } if (event.target.id === 'duplicate-load') duplicateSelectedLoads(); if (event.target.id === 'unlink-selected') { state.links.filter((link) => link.to === state.selected).forEach((link) => { const target = nodeById(link.to); if (target) target.socket = ''; }); state.links = state.links.filter((link) => link.to !== state.selected); render(); } });
   $('#delete-selected').onclick = () => { if (state.selectedLink) { const link = linkById(state.selectedLink), target = link && nodeById(link.to); if (target && !isReferenceLink(link)) target.socket = ''; state.links = state.links.filter((item) => item.id !== state.selectedLink); state.selectedLink = null; } else if (state.selected) { const deletedIds = state.selectedIds.length > 1 ? state.selectedIds : [state.selected]; state.links = state.links.filter((link) => !deletedIds.includes(link.from) && !deletedIds.includes(link.to)); state.nodes = state.nodes.filter((node) => !deletedIds.includes(node.id)); state.selected = null; state.selectedIds = []; } render(); };
-  $('#capture-file').addEventListener('change', (event) => event.target.files[0]?.text().then(prepareCaptureImport)); $('#welcome-capture-file').addEventListener('change', (event) => event.target.files[0]?.text().then(prepareCaptureImport)); $('#welcome-add-supply').onclick = () => { $('#welcome-dialog').close(); addNode('supply'); }; $('#confirm-capture-import').onclick = (event) => { event.preventDefault(); importSelectedCaptureGroups(); }; $('#capture-select-all').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = true; }); $('#capture-select-none').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = false; }); $('#capture-prefix-actions').onclick = (event) => { const prefix = event.target.dataset.capturePrefix; if (!prefix) return; document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = circuitPrefix(pendingCaptureGroups[Number(input.dataset.captureIndex)].circuit) === prefix; }); };
+  $('#capture-file').addEventListener('change', (event) => event.target.files[0]?.text().then(prepareCaptureImport)); $('#welcome-capture-file').addEventListener('change', (event) => event.target.files[0]?.text().then(prepareCaptureImport)); $('#welcome-add-supply').onclick = () => { $('#welcome-dialog').close(); addNode('supply'); }; $('#capture-parent').onchange = updateCaptureSocapexAvailability; $('#confirm-capture-import').onclick = (event) => { event.preventDefault(); importSelectedCaptureGroups(); }; $('#capture-select-all').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = true; }); $('#capture-select-none').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = false; }); $('#capture-prefix-actions').onclick = (event) => { const prefix = event.target.dataset.capturePrefix; if (!prefix) return; document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = circuitPrefix(pendingCaptureGroups[Number(input.dataset.captureIndex)].circuit) === prefix; }); };
   $('#confirm-link').onclick = (event) => { event.preventDefault(); const from = $('#link-from').value, to = $('#link-to').value; if (from === to) return alert('Scegli due elementi diversi.'); if (tryAddLink(from, to, $('#link-cable').value, Number($('#link-length').value) || 0)) $('#link-dialog').close(); render(); };
   $('#save-project').onclick = save; $('#print-project').onclick = preparePrint; $('#open-project').addEventListener('change', (event) => event.target.files[0]?.text().then((text) => { const loaded = JSON.parse(text); migrateLegacySocapex(loaded); migrateSupplyReferences(loaded); migratePanelReferences(loaded); migratePowerLockSupplyTypes(loaded); state = { ...loaded, meta: { company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '', ...loaded.meta }, pages: loaded.pages || Array.from({ length: Math.max(1, ...loaded.nodes.map((node) => node.page)) }, (_, index) => index + 1), library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null }; const ids = { name: 'event-name', location: 'event-location', type: 'event-type', revision: 'event-version' }; Object.entries(ids).forEach(([key, id]) => { $(`#${id}`).value = state.meta[key] || ''; }); $('#welcome-dialog').close(); render(); }));
   bindDiagram();
