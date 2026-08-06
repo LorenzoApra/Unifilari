@@ -497,7 +497,7 @@ function updatePanelChoiceDetails() {
 }
 function updatePanelModeDetails() { const model = state.library.find((row) => row.matricola === $('#panel-choice').value); const ports = selectedPanelPorts(model || { ports: [] }); $('#panel-choice-details').textContent = `${cableById(model?.inputType).name} in ingresso · ${ports.map((port) => `${port.quantity}× ${cableById(port.type).name}`).join(', ')}`; }
 function showLinkDialog() { $('#link-from').innerHTML = nodeOptions(); $('#link-to').innerHTML = nodeOptions(); $('#link-cable').innerHTML = cableOptions(); $('#link-dialog').showModal(); }
-function save() { const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${(state.meta.name || 'unifilare').replace(/[^\w]+/g, '-').toLowerCase()}.json`; anchor.click(); URL.revokeObjectURL(url); }
+function save() { const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' }), filename = [state.meta.name || 'unifilare', state.meta.revision].filter(Boolean).join(' ').replace(/[^\w]+/g, '-').toLowerCase(), url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${filename}.json`; anchor.click(); URL.revokeObjectURL(url); }
 function coverMarkup() {
   const company = [state.meta.company, state.meta.companyAddress, state.meta.companyVat ? `P. IVA ${state.meta.companyVat}` : ''].filter(Boolean).join('\n');
   const rows = [['Nome Evento', state.meta.name || '—'], ['Location', state.meta.location || '—'], ['Descrizione Allestimento', state.meta.type || '—'], ['Versione', state.meta.revision || '—'], ['Ditta esecutrice', company || '—']];
