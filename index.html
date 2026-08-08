@@ -8,11 +8,16 @@
   </head>
   <body>
     <header class="topbar">
+      <button type="button" class="icon-button mobile-only" id="toggle-sidebar" aria-label="Apri strumenti" aria-expanded="false">☰</button>
       <div class="brand"><span class="brand-mark">U</span><span>Unifilari</span></div>
       <div id="project-name" class="project-name">Nuovo progetto</div>
+      <div id="save-state" class="save-state" role="status">Nuovo progetto</div>
       <div class="top-actions">
+        <button type="button" class="button quiet compact-action" id="undo-action" disabled aria-label="Annulla ultima modifica" title="Annulla (⌘/Ctrl+Z)">↶</button>
+        <button type="button" class="button quiet compact-action" id="redo-action" disabled aria-label="Ripristina modifica" title="Ripristina (⌘/Ctrl+Maiusc+Z)">↷</button>
+        <button type="button" class="button quiet" id="new-project">Nuovo</button>
         <button class="button quiet" id="save-project">Salva progetto</button>
-        <label class="button quiet">Apri progetto<input id="open-project" type="file" accept="application/json" hidden /></label>
+        <label class="button quiet">Apri progetto<input id="open-project" type="file" accept="application/json,.json" hidden /></label>
         <button class="button primary" id="print-project">Esporta PDF</button>
       </div>
     </header>
@@ -68,7 +73,14 @@
       <section class="workspace">
         <div class="workspace-toolbar no-print">
           <div><strong id="page-label">Pagina 1</strong><span id="page-summary"></span><span id="status-message" role="status"></span></div>
-          <div class="page-buttons"><button id="previous-page">←</button><button id="next-page">→</button><button id="new-page">+ Pagina</button></div>
+          <div class="page-buttons">
+            <button type="button" id="previous-page" aria-label="Pagina precedente">←</button>
+            <select id="page-select" aria-label="Vai alla pagina"></select>
+            <button type="button" id="next-page" aria-label="Pagina successiva">→</button>
+            <button type="button" id="new-page">+ Pagina</button>
+            <button type="button" id="delete-page" title="Elimina pagina">− Pagina</button>
+            <button type="button" id="toggle-inspector" aria-expanded="false">Proprietà</button>
+          </div>
         </div>
         <div id="sheet-wrapper">
           <article id="drawing-sheet" class="drawing-sheet">
@@ -170,6 +182,7 @@
         <div class="welcome-actions">
           <button type="button" id="welcome-add-supply">Crea una fornitura</button>
           <label class="button primary">Importa circuiti Capture<input id="welcome-capture-file" type="file" accept=".csv,text/csv" hidden /></label>
+          <button type="button" id="restore-autosave" hidden>Ripristina lavoro automatico</button>
         </div>
         <menu><button value="cancel">Inizia vuoto</button></menu>
       </form>
@@ -201,7 +214,7 @@
     <dialog id="bulk-connect-dialog">
       <form method="dialog">
         <h2>Collega utenze selezionate</h2>
-        <label>Quadro / fornitura di partenza<select id="bulk-connect-parent"></select></label>
+        <label>Quadro di partenza<select id="bulk-connect-parent"></select></label>
         <p class="help">Le linee vengono impostate automaticamente in base alla spina dell’utenza e alla disponibilità del quadro.</p>
         <div class="bulk-selection-actions"><button type="button" id="bulk-connect-select-all">Seleziona tutte</button><button type="button" id="bulk-connect-select-none">Nessuna</button></div>
         <div id="bulk-connect-load-list" class="capture-circuit-list"></div>
@@ -234,6 +247,7 @@
         <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-company" value="default">Salva</button></menu>
       </form>
     </dialog>
+    <script src="core.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

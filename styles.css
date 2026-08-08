@@ -20,5 +20,41 @@ dialog { width: 350px; max-width: calc(100vw - 30px); max-height: calc(100vh - 3
 .inline-option { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid #d5dbe5; border-radius: 5px; background: #f8fafc; }.inline-option input { width: auto; margin: 0; }.inline-option span { font-weight: 650; }.inline-option:has(input:disabled) { opacity: .55; }
 .bulk-load-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .temporary-port { display: grid; grid-template-columns: 1fr 74px auto; align-items: end; gap: 7px; }.temporary-port button { margin-bottom: 10px; border: 1px solid #e5b4b4; border-radius: 5px; padding: 7px; color: #a03636; background: white; font-size: 11px; }
-@media (max-width: 1050px) { .app-shell { grid-template-columns: 220px minmax(600px, 1fr); }.inspector { display: none; } }
+.mobile-only, #toggle-inspector { display: none; }.icon-button { width: auto; border: 1px solid #ffffff55; border-radius: 5px; padding: 6px 9px; color: white; background: transparent; }.save-state { padding-left: 10px; border-left: 1px solid #ffffff35; color: #b9c7dc; font-size: 11px; }.compact-action { min-width: 35px; padding-right: 8px; padding-left: 8px; font-size: 18px; line-height: 1; }.button:disabled, button:disabled { cursor: not-allowed; opacity: .48; }.page-buttons select { width: auto; min-width: 92px; padding: 3px 6px; }.dialog-status { margin: 10px 0; padding: 8px 10px; border: 1px solid #e4b0b0; border-radius: 5px; color: #8f2929; background: #fff4f4; font-size: 12px; }button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, svg .node:focus-visible rect, svg .link:focus-visible .connector, svg .link:focus-visible .socapex-bus { outline: 3px solid #68a7ed; outline-offset: 2px; }svg .node:focus-visible rect { stroke: #216fc1; stroke-width: 3; }.inspector { transition: transform .2s ease; }
+@media (max-width: 1050px) {
+  .app-shell { grid-template-columns: 220px minmax(0, 1fr); }
+  #toggle-inspector { display: inline-block; }
+  .inspector { position: fixed; z-index: 30; top: 58px; right: 0; bottom: 0; display: block; width: min(360px, 92vw); box-shadow: -8px 0 24px #14233c33; transform: translateX(105%); }
+  .inspector.open { transform: translateX(0); }
+  .workspace { min-width: 0; }
+  .drawing-title { font-size: clamp(17px, 2.5vw, 26px); }
+}
+@media (max-width: 760px) {
+  .mobile-only { display: inline-block; }
+  .topbar { gap: 9px; padding: 0 10px; }
+  .brand { font-size: 16px; }
+  .project-name, .save-state { display: none; }
+  .top-actions { gap: 4px; }
+  .top-actions .button, .top-actions label.button { padding: 6px 7px; font-size: 11px; }
+  .compact-action { display: none; }
+  .app-shell { display: block; height: calc(100vh - 58px); }
+  .sidebar { position: fixed; z-index: 35; top: 58px; bottom: 0; left: 0; width: min(310px, 88vw); box-shadow: 8px 0 24px #14233c33; transform: translateX(-105%); transition: transform .2s ease; }
+  .sidebar.open { transform: translateX(0); }
+  .workspace { height: 100%; padding: 10px; }
+  .workspace-toolbar { align-items: flex-start; gap: 8px; }
+  .workspace-toolbar > div:first-child { min-width: 0; }
+  .workspace-toolbar #status-message { display: block; margin: 3px 0 0; }
+  .page-buttons { flex-wrap: wrap; justify-content: flex-end; }
+  .page-buttons button, .page-buttons select { min-height: 31px; }
+  .drawing-sheet { min-width: 680px; }
+  #sheet-wrapper { overflow-x: auto; padding-bottom: 8px; }
+}
+@media (max-width: 480px) {
+  .brand > span:last-child { display: none; }
+  #new-project { display: none; }
+  .top-actions .button, .top-actions label.button { max-width: 78px; text-align: center; }
+  .workspace-toolbar { display: grid; }
+  .page-buttons { justify-content: flex-start; }
+  #delete-page { display: none; }
+}
 @media print { @page { size: A4 landscape; margin: 0; } html, body { width: 297mm; height: 210mm; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }.no-print, .topbar, #sheet-wrapper > #drawing-sheet, .link-handle { display: none !important; }.app-shell { display: block; height: auto; }.workspace { padding: 0; overflow: visible; }.print-pages, body.preparing-print .print-pages { position: static; display: block; visibility: visible; width: auto; }.drawing-sheet, .cover-sheet, .index-sheet { width: 297mm; height: 210mm; max-width: none; margin: 0; box-shadow: none; break-after: page; page-break-after: always; }.print-pages > :last-child { break-after: auto; page-break-after: auto; }.drawing-sheet svg { height: 85%; } }

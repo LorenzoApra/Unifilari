@@ -1,0 +1,11 @@
+{
+  "name": "unifilari-ats",
+  "version": "0.6.0",
+  "private": true,
+  "description": "Editor statico per schemi unifilari di distribuzione elettrica",
+  "scripts": {
+    "test": "node tests/core.test.js",
+    "check": "node --check core.js && node --check app.js && node tests/core.test.js"
+  },
+  "license": "GPL-3.0-only"
+}
