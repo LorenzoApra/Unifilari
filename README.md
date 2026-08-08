@@ -1,4 +1,4 @@
-# Unifilari ATS
+# Unifilari
 
 Applicazione web statica per creare schemi unifilari di distribuzione elettrica per eventi.
 
