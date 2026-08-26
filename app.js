@@ -335,7 +335,7 @@ function addNode(type) {
   const node = { id: uid(), type, page, title: defaults[0], subtitle: defaults[1], details: defaults[2], x: defaults[3], y: defaults[4], socket: '', watts: 0 };
   if (type === 'supply') { node.supplyKey = uid(); node.supplyType = 'cee125tri'; node.subtitle = CABLES.find((cable) => cable.id === node.supplyType).plug; }
   if (type === 'load') { node.plugType = 'cee16mono'; node.subtitle = CABLES.find((cable) => cable.id === node.plugType).plug; }
-  state.nodes.push(node); const extraPages = type === 'load' ? ensureLoadPageCapacity(page) : 0; if (extraPages) state.currentPage = node.page; state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; markChanged(); render(); if (extraPages) showStatus(`Utenza aggiunta e nuova pagina ${pagesCount()} creata automaticamente.`);
+  state.nodes.push(node); const extraPages = type === 'load' ? ensureLoadPageCapacity(page, [node.id]) : 0; if (extraPages) state.currentPage = node.page; state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; markChanged(); render(); if (extraPages) showStatus(`Utenza aggiunta e nuova pagina ${pagesCount()} creata automaticamente.`);
 }
 function openSupplyReferenceDialog() {
   const supplies = uniqueSupplies().filter((supply) => !pageNodes().some((node) => node.type === 'supply' && supplyKey(node) === supplyKey(supply)));
@@ -414,9 +414,8 @@ function addBulkLoads() {
     const node = { id: uid(), type: 'load', page: state.currentPage, x: 835, y: 135 + index * 56, title: count === 1 ? title : `${title} ${start + index}`, subtitle: cableById(plugType).plug, plugType, details: `Assorbimento ${(watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`, socket: '', watts };
     state.nodes.push(node); nodes.push(node);
   }
-  arrangeNodes(pageNodes().filter((node) => node.type === 'load'), 850);
   let linked = 0; nodes.forEach((node) => { if (parentId && tryAddLink(parentId, node.id, plugType, 20, false)) linked++; });
-  const extraPages = ensureLoadPageCapacity(state.currentPage);
+  const extraPages = ensureLoadPageCapacity(state.currentPage, nodes.map((node) => node.id));
   $('#bulk-load-dialog').close(); state.selectedIds = nodes.filter((node) => node.page === state.currentPage).map((node) => node.id); state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; markChanged(); render(); showStatus(`Aggiunte ${count} utenze${parentId ? `, collegate ${linked}` : ''}${extraPages ? ` e distribuite su ${extraPages + 1} pagine` : ''}.`);
 }
 function selectedPanelPorts(config) { const alternative = (config.alternatives || []).find((item) => item.id === $('#panel-mode').value); return alternative?.ports || config.ports; }
@@ -490,6 +489,31 @@ function arrangeNodes(nodes, anchorX = 600) {
   const minCenter = 110 + ((columns - 1) * stepX) / 2, maxCenter = 1090 - ((columns - 1) * stepX) / 2, centerX = Math.max(minCenter, Math.min(maxCenter, anchorX)), startX = centerX - ((columns - 1) * stepX) / 2, startY = 390 - ((rows - 1) * stepY) / 2;
   items.forEach((node, index) => { const column = Math.floor(index / rows), row = index % rows; node.x = startX + column * stepX; node.y = startY + row * stepY; });
 }
+function nodesOverlap(first, second, gap = 18) {
+  return Math.abs(first.x - second.x) < NODE_HALF * 2 + gap && Math.abs(first.y - second.y) < (nodeDisplayHeight(first) + nodeDisplayHeight(second)) / 2 + gap;
+}
+function placeNewLoads(nodes, page) {
+  const movingIds = new Set(nodes.map((node) => node.id));
+  const occupied = state.nodes.filter((node) => node.page === page && !movingIds.has(node.id));
+  const preferredX = [835, 1080, 590, 345, 110];
+  const preferredY = [115, 225, 335, 445, 555, 665];
+  nodes.forEach((node) => {
+    const height = nodeDisplayHeight(node);
+    const candidates = [
+      { x: node.x, y: node.y },
+      ...preferredX.flatMap((x) => preferredY.map((y) => ({ x, y }))),
+    ];
+    for (let x = 110; x <= 1090; x += 35) {
+      for (let y = Math.ceil(15 + height / 2); y <= Math.floor(735 - height / 2); y += 25) candidates.push({ x, y });
+    }
+    const position = candidates.find((candidate) => {
+      const placed = { ...node, x: candidate.x, y: candidate.y };
+      return candidate.x >= 110 && candidate.x <= 1090 && candidate.y - height / 2 >= 15 && candidate.y + height / 2 <= 735 && !occupied.some((item) => nodesOverlap(placed, item));
+    });
+    if (position) { node.x = position.x; node.y = position.y; }
+    occupied.push(node);
+  });
+}
 function createPhysicalReference(source, page) {
   const existing = state.nodes.find((node) => node.page === page && samePhysicalNode(node, source));
   if (existing) return existing;
@@ -499,26 +523,32 @@ function createPhysicalReference(source, page) {
   state.nodes.push(reference);
   return reference;
 }
-function ensureLoadPageCapacity(page) {
+function ensureLoadPageCapacity(page, addedIds = []) {
   const loads = state.nodes.filter((node) => node.type === 'load' && node.page === page);
-  if (loads.length <= MAX_LOADS_PER_PAGE) { arrangeNodes(loads, 835); return 0; }
+  const added = new Set(addedIds);
+  if (loads.length <= MAX_LOADS_PER_PAGE) { placeNewLoads(loads.filter((node) => added.has(node.id)), page); return 0; }
+  const existing = loads.filter((node) => !added.has(node.id));
+  const candidates = loads.filter((node) => added.has(node.id));
+  if (!candidates.length) candidates.push(...loads.slice(MAX_LOADS_PER_PAGE));
   const units = [], grouped = new Set();
-  loads.forEach((load) => {
+  candidates.forEach((load) => {
     const link = state.links.find((item) => !isReferenceLink(item) && item.to === load.id);
     if (link?.socapexGroup) {
       if (grouped.has(link.socapexGroup)) return;
       grouped.add(link.socapexGroup);
-      units.push(loads.filter((item) => state.links.some((candidate) => candidate.socapexGroup === link.socapexGroup && candidate.to === item.id)));
+      units.push(candidates.filter((item) => state.links.some((candidate) => candidate.socapexGroup === link.socapexGroup && candidate.to === item.id)));
     } else units.push([load]);
   });
-  const chunks = [[]];
+  const kept = [], chunks = [];
+  let available = Math.max(0, MAX_LOADS_PER_PAGE - existing.length);
   units.forEach((unit) => {
-    if (chunks.at(-1).length && chunks.at(-1).length + unit.length > MAX_LOADS_PER_PAGE) chunks.push([]);
+    if (unit.length <= available) { kept.push(...unit); available -= unit.length; return; }
+    if (!chunks.length || chunks.at(-1).length + unit.length > MAX_LOADS_PER_PAGE) chunks.push([]);
     chunks.at(-1).push(...unit);
   });
-  arrangeNodes(chunks[0], 835);
+  placeNewLoads(kept, page);
   let createdPages = 0;
-  chunks.slice(1).forEach((chunk) => {
+  chunks.forEach((chunk) => {
     const nextPage = pagesCount() + 1; state.pages.push(nextPage); createdPages++;
     chunk.forEach((load) => { load.page = nextPage; });
     const references = new Map();
@@ -573,7 +603,7 @@ function importSelectedCaptureGroups() {
   selected.forEach((group) => { index++; const node = { id: uid(), type: 'load', page: state.currentPage, x: 835, y: Math.min(650, 120 + index * 75), title: `Circuito ${group.circuit}`, subtitle: CABLES[0].plug, plugType: 'cee16mono', details: `Assorbimento ${(group.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`, socket: '', watts: group.watts, fixtures: group.fixtures }; state.nodes.push(node); importedIds.push(node.id); });
   if (useSocapex) ({ linked, groups: socapexGroups } = connectLoadsAsSocapex(parent, importedIds));
   else if (parent) importedIds.forEach((id) => { if (tryAddLink(parent, id, 'cee16mono', 20, false)) linked++; });
-  const extraPages = ensureLoadPageCapacity(state.currentPage);
+  const extraPages = ensureLoadPageCapacity(state.currentPage, importedIds);
   $('#capture-import-dialog').close(); state.selectedIds = importedIds.filter((id) => nodeById(id)?.page === state.currentPage); state.selected = state.selectedIds.at(-1) || null; markChanged(); render(); showStatus(`Importati ${selected.length} circuiti${parent ? `, collegati ${linked}${useSocapex ? ` in ${socapexGroups} Socapex` : ''}` : ''}${parent && linked < selected.length ? `; ${selected.length - linked} senza collegamento per mancanza di prese libere` : ''}${extraPages ? `, distribuiti su ${extraPages + 1} pagine` : ''}.`);
 }
 function openSocapexDialog() {
@@ -650,7 +680,7 @@ function duplicateSelectedLoads() {
     const baseTitle = original.title.replace(/\s+copia(?:\s+\d+)?$/i, ''), sameTitles = state.nodes.filter((node) => node.type === 'load' && node.page === state.currentPage && node.title.startsWith(`${baseTitle} copia`)).length;
     return { ...original, id: uid(), title: `${baseTitle} copia${sameTitles + index ? ` ${sameTitles + index + 1}` : ''}`, socket: '', x: original.x + 20, y: original.y + 20 };
   });
-  state.nodes.push(...duplicates); const extraPages = ensureLoadPageCapacity(state.currentPage); state.selectedIds = duplicates.filter((node) => node.page === state.currentPage).map((node) => node.id); state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; markChanged(); render(); showStatus(`Duplicate ${duplicates.length} utenz${duplicates.length === 1 ? 'a' : 'e'}${extraPages ? ` su ${extraPages + 1} pagine` : ''}.`);
+  state.nodes.push(...duplicates); const extraPages = ensureLoadPageCapacity(state.currentPage, duplicates.map((node) => node.id)); state.selectedIds = duplicates.filter((node) => node.page === state.currentPage).map((node) => node.id); state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; markChanged(); render(); showStatus(`Duplicate ${duplicates.length} utenz${duplicates.length === 1 ? 'a' : 'e'}${extraPages ? ` su ${extraPages + 1} pagine` : ''}.`);
 }
 function migrateLegacySocapex(project) {
   project.nodes = Array.isArray(project.nodes) ? project.nodes : [];
