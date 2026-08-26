@@ -174,6 +174,10 @@ function textLines(node) {
   if (node.type === 'load') return [`${node.title}${node.socket ? ` - Presa ${node.socket}` : ''}`, node.subtitle, node.details, node.note].filter(Boolean).flatMap((line) => wrapText(line, 32));
   return [node.title, node.socket ? `Presa ${node.socket}` : node.subtitle, node.socket ? node.subtitle : node.details, node.socket ? node.details : ''].filter(Boolean).flatMap((line) => wrapText(line, 23));
 }
+function nodeDisplayHeight(node) {
+  const compact = node.type === 'load', lineHeight = compact ? 14 : 20;
+  return Math.max(compact ? 50 : 58, textLines(node).length * lineHeight + (compact ? 10 : 16));
+}
 function directCableSiblings(link) { return state.links.filter((item) => !item.socapexGroup && item.from === link.from && item.cable === link.cable && nodeById(item.to)?.page === state.currentPage).sort((first, second) => (nodeById(first.to)?.y || 0) - (nodeById(second.to)?.y || 0)); }
 function cablePlugLabel(cable) { return cable.plug.replace(/^CEE\s+/, '').replace('3P+N+T', '3P + N + T').replace('P+N+T', 'P + N + T'); }
 function cableShortLabel(cable) { return cable.name.replace(/ monofase| trifase/gi, '').replace(/ (\d+) A$/, ' $1A'); }
@@ -284,7 +288,7 @@ function render() {
     markup += `<g class="link ${state.selectedLink === link.id ? 'selected' : ''}" data-link-id="${link.id}" tabindex="0" role="button" aria-label="Collegamento da ${esc(from.title)} a ${esc(to.title)}"><path class="connector" d="M${startX},${from.y} H${midX} V${to.y} H${endX}"/>${labelMarkup}</g>`;
   });
   nodes.forEach((node) => {
-    const lines = textLines(node), compact = node.type === 'load', lineHeight = compact ? 14 : 20, topPadding = compact ? 14 : 21, height = Math.max(compact ? 50 : 58, lines.length * lineHeight + (compact ? 10 : 16));
+    const lines = textLines(node), compact = node.type === 'load', lineHeight = compact ? 14 : 20, topPadding = compact ? 14 : 21, height = nodeDisplayHeight(node);
     const texts = lines.map((line, index) => `<text class="${index === 0 || (node.type === 'panel' && index === 2) ? 'node-title' : ''}" x="${node.x}" y="${node.y - height / 2 + topPadding + index * lineHeight}">${esc(line)}</text>`).join('');
     markup += `<g class="node ${node.type} ${state.selectedIds.includes(node.id) ? 'selected' : ''}" data-id="${node.id}" tabindex="0" role="button" aria-label="${esc(node.title)}"><rect x="${node.x - NODE_HALF}" y="${node.y - height / 2}" width="${NODE_HALF * 2}" height="${height}"/>${texts}<circle class="link-handle" data-source="${node.id}" cx="${node.x + NODE_HALF}" cy="${node.y}" r="7" aria-hidden="true"/></g>`;
   });
@@ -631,14 +635,13 @@ function arrangeSelectedNodes() {
 function openAlignDialog() { if (!selectedNodes().length) return showStatus('Seleziona gli elementi da allineare.'); $('#align-dialog').showModal(); }
 function alignSelectedNodes() {
   const nodes = selectedNodes(); if (nodes.length < 2) return showStatus('Seleziona almeno due elementi da allineare.');
-  checkpoint('align'); const mode = $('#align-mode').value, xs = nodes.map((node) => node.x), ys = nodes.map((node) => node.y), average = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
-  if (mode === 'left') nodes.forEach((node) => { node.x = Math.min(...xs); });
-  if (mode === 'right') nodes.forEach((node) => { node.x = Math.max(...xs); });
-  if (mode === 'center-x') nodes.forEach((node) => { node.x = average(xs); });
-  if (mode === 'top') nodes.forEach((node) => { node.y = Math.min(...ys); });
-  if (mode === 'bottom') nodes.forEach((node) => { node.y = Math.max(...ys); });
-  if (mode === 'center-y') nodes.forEach((node) => { node.y = average(ys); });
-  $('#align-dialog').close(); markChanged(); render(); showStatus(`${nodes.length} elementi allineati.`);
+  const mode = $('#align-mode').value;
+  const aligned = Core.alignNodesWithoutOverlap(nodes.map((node) => ({ id: node.id, x: node.x, y: node.y, width: NODE_HALF * 2, height: nodeDisplayHeight(node) })), mode, { gap: 24 });
+  if (!aligned.ok) return showStatus('Non c’è spazio sufficiente per allineare questi elementi senza sovrapporli. Usa “Ordina selezionati” oppure riduci la selezione.');
+  checkpoint('align');
+  const positions = new Map(aligned.positions.map((position) => [position.id, position]));
+  nodes.forEach((node) => { const position = positions.get(node.id); node.x = position.x; node.y = position.y; });
+  $('#align-dialog').close(); markChanged(); render(); showStatus(`${nodes.length} elementi allineati e distanziati.`);
 }
 function duplicateSelectedLoads() {
   const originals = selectedNodes().filter((node) => node.type === 'load');

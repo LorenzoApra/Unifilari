@@ -106,4 +106,37 @@ const load = node({ id: 'load-1', type: 'load', plugType: 'cee16mono', watts: 10
   assert.equal('selected' in serialized, false);
 }
 
+{
+  const aligned = Core.alignNodesWithoutOverlap([
+    { id: 'a', x: 300, y: 200, width: 200, height: 60 },
+    { id: 'b', x: 500, y: 200, width: 200, height: 60 },
+  ], 'left', { gap: 24 });
+  assert.equal(aligned.ok, true);
+  assert.equal(aligned.positions[0].x, aligned.positions[1].x);
+  assert.ok(Math.abs(aligned.positions[0].y - aligned.positions[1].y) >= 84);
+}
+
+{
+  const aligned = Core.alignNodesWithoutOverlap([
+    { id: 'a', x: 400, y: 180, width: 200, height: 60 },
+    { id: 'b', x: 400, y: 420, width: 200, height: 80 },
+  ], 'top', { gap: 24 });
+  assert.equal(aligned.ok, true);
+  const [first, second] = aligned.positions;
+  assert.equal(first.y - 30, second.y - 40);
+  assert.ok(Math.abs(first.x - second.x) >= 224);
+}
+
+{
+  const aligned = Core.alignNodesWithoutOverlap(Array.from({ length: 20 }, (_, index) => ({
+    id: `item-${index}`,
+    x: 300,
+    y: 300,
+    width: 200,
+    height: 60,
+  })), 'left', { gap: 24 });
+  assert.equal(aligned.ok, false);
+  assert.equal(aligned.reason, 'insufficient-space');
+}
+
 console.log('Core domain tests: OK');

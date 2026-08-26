@@ -384,8 +384,98 @@
     };
   }
 
+  function spreadWithoutOverlap(items, axis, sizeKey, minimum, maximum, gap) {
+    const ordered = items
+      .map((item, index) => ({ ...item, originalIndex: index }))
+      .sort((first, second) => first[axis] - second[axis] || first.originalIndex - second.originalIndex);
+    const distance = (first, second) => first[sizeKey] / 2 + gap + second[sizeKey] / 2;
+    const positions = ordered.map((item) => item[axis]);
+
+    positions[0] = Math.max(positions[0], minimum + ordered[0][sizeKey] / 2);
+    for (let index = 1; index < ordered.length; index++) {
+      positions[index] = Math.max(positions[index], positions[index - 1] + distance(ordered[index - 1], ordered[index]));
+    }
+
+    const last = ordered.length - 1;
+    if (positions[last] + ordered[last][sizeKey] / 2 > maximum) {
+      positions[last] = maximum - ordered[last][sizeKey] / 2;
+      for (let index = last - 1; index >= 0; index--) {
+        positions[index] = Math.min(positions[index], positions[index + 1] - distance(ordered[index], ordered[index + 1]));
+      }
+    }
+
+    if (positions[0] - ordered[0][sizeKey] / 2 < minimum) {
+      positions[0] = minimum + ordered[0][sizeKey] / 2;
+      for (let index = 1; index < ordered.length; index++) {
+        positions[index] = Math.max(positions[index], positions[index - 1] + distance(ordered[index - 1], ordered[index]));
+      }
+    }
+
+    if (positions[last] + ordered[last][sizeKey] / 2 > maximum) return null;
+    return new Map(ordered.map((item, index) => [item.id, positions[index]]));
+  }
+
+  function alignNodesWithoutOverlap(rawItems, mode, options = {}) {
+    const validModes = new Set(['left', 'right', 'center-x', 'top', 'bottom', 'center-y']);
+    if (!Array.isArray(rawItems) || rawItems.length < 2 || !validModes.has(mode)) {
+      return { ok: false, reason: 'invalid-selection', positions: [] };
+    }
+    const items = rawItems.map((item) => ({
+      id: item.id,
+      x: Number(item.x),
+      y: Number(item.y),
+      width: Math.max(1, Number(item.width) || 1),
+      height: Math.max(1, Number(item.height) || 1),
+    }));
+    if (items.some((item) => !item.id || !Number.isFinite(item.x) || !Number.isFinite(item.y))) {
+      return { ok: false, reason: 'invalid-selection', positions: [] };
+    }
+
+    const bounds = {
+      minX: Number.isFinite(options.minX) ? options.minX : 10,
+      maxX: Number.isFinite(options.maxX) ? options.maxX : 1190,
+      minY: Number.isFinite(options.minY) ? options.minY : 15,
+      maxY: Number.isFinite(options.maxY) ? options.maxY : 735,
+    };
+    const gap = Math.max(0, Number(options.gap) || 0);
+    const vertical = ['left', 'right', 'center-x'].includes(mode);
+    const crossPositions = spreadWithoutOverlap(
+      items,
+      vertical ? 'y' : 'x',
+      vertical ? 'height' : 'width',
+      vertical ? bounds.minY : bounds.minX,
+      vertical ? bounds.maxY : bounds.maxX,
+      gap,
+    );
+    if (!crossPositions) return { ok: false, reason: 'insufficient-space', positions: [] };
+
+    const average = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
+    const left = Math.max(bounds.minX, Math.min(...items.map((item) => item.x - item.width / 2)));
+    const right = Math.min(bounds.maxX, Math.max(...items.map((item) => item.x + item.width / 2)));
+    const top = Math.max(bounds.minY, Math.min(...items.map((item) => item.y - item.height / 2)));
+    const bottom = Math.min(bounds.maxY, Math.max(...items.map((item) => item.y + item.height / 2)));
+    const centerX = Math.max(
+      bounds.minX + Math.max(...items.map((item) => item.width)) / 2,
+      Math.min(bounds.maxX - Math.max(...items.map((item) => item.width)) / 2, average(items.map((item) => item.x))),
+    );
+    const centerY = Math.max(
+      bounds.minY + Math.max(...items.map((item) => item.height)) / 2,
+      Math.min(bounds.maxY - Math.max(...items.map((item) => item.height)) / 2, average(items.map((item) => item.y))),
+    );
+
+    return {
+      ok: true,
+      positions: items.map((item) => ({
+        id: item.id,
+        x: mode === 'left' ? left + item.width / 2 : mode === 'right' ? right - item.width / 2 : mode === 'center-x' ? centerX : crossPositions.get(item.id),
+        y: mode === 'top' ? top + item.height / 2 : mode === 'bottom' ? bottom - item.height / 2 : mode === 'center-y' ? centerY : crossPositions.get(item.id),
+      })),
+    };
+  }
+
   return {
     SCHEMA_VERSION,
+    alignNodesWithoutOverlap,
     availablePanelSockets,
     compatibleConnector,
     isPowerLock,
