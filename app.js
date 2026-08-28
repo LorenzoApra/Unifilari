@@ -10,6 +10,11 @@ const CABLES = [
   { id: 'powerlock400', name: '400A PowerLock', plug: 'PowerLock 400 A trifase', cable: 'Cavo sezione 120 mm²', supplyOnly: true },
   { id: 'socapex', name: 'Socapex', plug: 'Socapex', cable: 'Titanex 19G2,5 mm²' },
 ];
+const CABLE_INDEX = new Map(CABLES.map((cable) => [cable.id, cable]));
+const CATALOG_CABLES = CABLES.filter((cable) => !cable.internal);
+const LINE_CABLES = CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal);
+const LOAD_PLUGS = LINE_CABLES.filter((cable) => !cable.supplyOnly);
+const PANEL_PORTS = CABLES.filter((cable) => cable.id !== 'socapex' && !cable.supplyOnly);
 // Libreria standard derivata da Quadri.xlsx: viene gestita nel codice dell'app, non nell'interfaccia utente.
 const portList = (...items) => items.map(([type, quantity]) => ({ type, quantity }));
 const panelModels = (prefix, numbers, inputType, ports, alternatives = []) => numbers.map((number) => ({ matricola: `${prefix}#${number}`, inputType, ports, alternatives }));
@@ -53,6 +58,7 @@ let lastHistoryAt = 0;
 let dirty = false;
 let savedProjectSnapshot = null;
 let autosaveTimer = null;
+let renderFrame = null;
 
 function serializableProject() {
   return Core.serializeProject(state);
@@ -136,13 +142,6 @@ function projectIssues() {
   return Core.validateProject(state, { cableName: (id) => cableById(id).name });
 }
 
-function demoProject() {
-  const supply = { id: uid(), type: 'supply', page: 1, x: 75, y: 135, title: 'Fornitura', subtitle: CABLES[4].plug, supplyType: 'cee125tri', details: '' };
-  const panel = { id: uid(), type: 'panel', page: 1, x: 270, y: 310, title: 'Quadro #1', subtitle: 'Quadro Generale', details: 'PB125A#01', panelModel: 'PB125A#01', inputType: 'cee125tri', ports: PANEL_LIBRARY[1].ports.map((port) => ({ ...port })), socket: '' };
-  const load = { id: uid(), type: 'load', page: 1, x: 825, y: 295, title: 'Utenza di esempio', subtitle: CABLES[0].plug, plugType: 'cee16mono', details: 'Assorbimento 2,5 kW', socket: 'P1', watts: 2500 };
-  state.nodes = [supply, panel, load];
-  state.links = [{ id: uid(), from: supply.id, to: panel.id, cable: 'cee125tri', length: 20 }, { id: uid(), from: panel.id, to: load.id, cable: 'cee16mono', length: 20 }];
-}
 function nodeById(id) { return state.nodes.find((node) => node.id === id); }
 function isReferenceLink(link) { return !!link?.referenceLink; }
 function supplyKey(node) { return node?.supplyKey || node?.id; }
@@ -163,7 +162,7 @@ function sortedPages() {
   return [...new Set([...(state.pages || [1]), ...state.nodes.map((node) => node.page)])].filter((page) => Number.isInteger(page) && page > 0).sort((first, second) => first - second);
 }
 function pagesCount() { return Math.max(1, ...sortedPages()); }
-function cableById(id) { return CABLES.find((cable) => cable.id === id) || CABLES[0]; }
+function cableById(id) { return CABLE_INDEX.get(id) || CABLES[0]; }
 function esc(value) { return String(value || '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char])); }
 function wrapText(value, maxLength) {
   const words = String(value || '').split(/\s+/); const lines = []; let line = '';
@@ -178,8 +177,6 @@ function nodeDisplayHeight(node) {
   const compact = node.type === 'load', lineHeight = compact ? 14 : 20;
   return Math.max(compact ? 50 : 58, textLines(node).length * lineHeight + (compact ? 10 : 16));
 }
-function directCableSiblings(link) { return state.links.filter((item) => !item.socapexGroup && item.from === link.from && item.cable === link.cable && nodeById(item.to)?.page === state.currentPage).sort((first, second) => (nodeById(first.to)?.y || 0) - (nodeById(second.to)?.y || 0)); }
-function cablePlugLabel(cable) { return cable.plug.replace(/^CEE\s+/, '').replace('3P+N+T', '3P + N + T').replace('P+N+T', 'P + N + T'); }
 function cableShortLabel(cable) { return cable.name.replace(/ monofase| trifase/gi, '').replace(/ (\d+) A$/, ' $1A'); }
 function linkLabel(link) {
   const cable = cableById(link.cable);
@@ -191,17 +188,17 @@ function linkLabelPosition(link, from, to) {
   const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = Math.round((startX + endX) / 2), lines = linkLabel(link).flatMap((line) => wrapText(line, 29));
   return { x: link.labelX ?? Math.min(midX + 16, 790), y: link.labelY ?? Math.max(22, Math.min(from.y, to.y) - lines.length * 19 - 7), lines };
 }
-function linkLaneX(link, from) {
-  const siblings = state.links.filter((item) => !item.socapexGroup && item.from === from.id && nodeById(item.to)?.page === state.currentPage).sort((first, second) => (nodeById(first.to)?.y || 0) - (nodeById(second.to)?.y || 0));
-  if (siblings.length < 2) return Math.round((from.x + NODE_HALF + (nodeById(link.to)?.x || 0) - NODE_HALF) / 2);
-  const index = siblings.findIndex((item) => item.id === link.id), startX = from.x + NODE_HALF, closestTargetX = Math.min(...siblings.map((item) => (nodeById(item.to)?.x || 0) - NODE_HALF));
+function linkLaneX(link, from, siblings, nodeIndex) {
+  if (siblings.length < 2) return Math.round((from.x + NODE_HALF + (nodeIndex.get(link.to)?.x || 0) - NODE_HALF) / 2);
+  const index = siblings.findIndex((item) => item.id === link.id), startX = from.x + NODE_HALF, closestTargetX = Math.min(...siblings.map((item) => (nodeIndex.get(item.to)?.x || 0) - NODE_HALF));
   return Math.round(startX + 28 + ((index + 1) * Math.max(24, closestTargetX - startX - 56)) / (siblings.length + 1));
 }
+function cableOptionMarkup(cables, selected) { return cables.map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
 function nodeOptions(selected) { return pageNodes().map((node) => `<option value="${node.id}" ${node.id === selected ? 'selected' : ''}>${esc(node.title)}${node.socket ? ` (${node.socket})` : ''}</option>`).join(''); }
-function cableOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
-function plugOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal && !cable.supplyOnly).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
-function supplyOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
-function panelPortOptions(selected) { return CABLES.filter((cable) => cable.id !== 'socapex' && !cable.supplyOnly).map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
+function cableOptions(selected) { return cableOptionMarkup(LINE_CABLES, selected); }
+function plugOptions(selected) { return cableOptionMarkup(LOAD_PLUGS, selected); }
+function supplyOptions(selected) { return cableOptionMarkup(LINE_CABLES, selected); }
+function panelPortOptions(selected) { return cableOptionMarkup(PANEL_PORTS, selected); }
 function isPowerLock(id) { return Core.isPowerLock(id); }
 function compatibleConnector(first, second) { return Core.compatibleConnector(first, second); }
 function requiredPlug(node) { return Core.requiredPlug(node); }
@@ -250,47 +247,69 @@ function updatePanelNumbering(from, target) {
     panelGroup(panel).forEach((instance) => { if (/^Quadro #\d+$/.test(instance.title || '')) instance.title = `Quadro #${index + 1}`; });
   });
 }
-function tryAddLink(fromId, toId, cable, length, recordHistory = true) {
+function tryAddLink(fromId, toId, cable, length, recordHistory = true, recordChange = true) {
   const from = nodeById(fromId), to = nodeById(toId); if (!from || !to || fromId === toId) return false;
   const lineCable = cable || requiredPlug(to) || 'cee16mono';
   const warning = compatibilityWarning(from, to, null, lineCable); if (warning) { showStatus(warning); return false; }
   if (recordHistory) checkpoint('add-link');
   if (!assignFirstFreeSocket(from, to)) { if (recordHistory) dropNoopHistory(); return false; }
   state.links.push({ id: uid(), from: fromId, to: toId, cable: lineCable, length: Number.isFinite(Number(length)) ? Math.max(0, Number(length)) : 20 });
-  updatePanelNumbering(from, to); markChanged(); showStatus(''); return true;
+  updatePanelNumbering(from, to);
+  if (recordChange) { markChanged(); showStatus(''); }
+  return true;
+}
+
+function socapexLinkKey(link) {
+  return link?.socapexGroup ? `${link.socapexGroup}:${link.from}:${isReferenceLink(link) ? 'reference' : 'physical'}` : '';
 }
 
 function render() {
+  if (renderFrame !== null) { cancelAnimationFrame(renderFrame); renderFrame = null; }
   const pages = sortedPages(), maxPages = pagesCount();
   if (!pages.includes(state.currentPage)) state.currentPage = pages[0] || 1;
-  state.selectedIds = state.selectedIds.filter((id) => nodeById(id));
+  const nodeIndex = new Map(state.nodes.map((node) => [node.id, node]));
+  state.selectedIds = state.selectedIds.filter((id) => nodeIndex.has(id));
   if (state.selected && !state.selectedIds.includes(state.selected)) state.selected = state.selectedIds.at(-1) || null;
   const svg = $('#diagram'); const nodes = pageNodes(); const ids = new Set(nodes.map((node) => node.id));
+  const selectedIds = new Set(state.selectedIds), socapexGroups = new Map(), outgoingDirect = new Map();
+  state.links.forEach((link) => {
+    if (link.socapexGroup) {
+      const key = socapexLinkKey(link);
+      if (!socapexGroups.has(key)) socapexGroups.set(key, []);
+      socapexGroups.get(key).push(link);
+      return;
+    }
+    if (nodeIndex.get(link.to)?.page !== state.currentPage) return;
+    if (!outgoingDirect.has(link.from)) outgoingDirect.set(link.from, []);
+    outgoingDirect.get(link.from).push(link);
+  });
+  outgoingDirect.forEach((links) => links.sort((first, second) => (nodeIndex.get(first.to)?.y || 0) - (nodeIndex.get(second.to)?.y || 0)));
   let markup = '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#1c1c1c"/></marker></defs>';
   markup += alignmentGuides.map((guide) => guide.axis === 'x' ? `<path class="alignment-guide" d="M${guide.value},15 V735"/>` : `<path class="alignment-guide" d="M35,${guide.value} H1165"/>`).join('');
   const renderedSocapexGroups = new Set();
   state.links.forEach((link) => {
     if (link.socapexGroup) {
-      if (renderedSocapexGroups.has(link.socapexGroup)) return;
-      renderedSocapexGroups.add(link.socapexGroup);
-      const group = state.links.filter((item) => item.socapexGroup === link.socapexGroup);
-      const from = nodeById(group[0]?.from), visibleTargets = group.map((item) => ({ link: item, node: nodeById(item.to) })).filter(({ node }) => node && ids.has(node.id));
+      const groupKey = socapexLinkKey(link);
+      if (renderedSocapexGroups.has(groupKey)) return;
+      renderedSocapexGroups.add(groupKey);
+      const group = socapexGroups.get(groupKey) || [];
+      const from = nodeIndex.get(group[0]?.from), visibleTargets = group.map((item) => ({ link: item, node: nodeIndex.get(item.to) })).filter(({ node }) => node && ids.has(node.id));
       if (!from || !ids.has(from.id) || !visibleTargets.length) return;
       const startX = from.x + NODE_HALF, endX = Math.min(...visibleTargets.map(({ node }) => node.x - NODE_HALF)), busX = Math.round((startX + endX) / 2), ys = visibleTargets.map(({ node }) => node.y), master = group[0], label = linkLabelPosition(master, from, visibleTargets[0].node);
       const labelMarkup = `<g class="link-label" data-link-id="${master.id}"><rect class="label-hit" x="${label.x - 5}" y="${label.y - 17}" width="310" height="${label.lines.length * 19 + 10}"/>${label.lines.map((line, index) => `<text class="line-label" x="${label.x}" y="${label.y + index * 19}">${esc(line)}</text>`).join('')}</g>`;
       markup += `<g class="link ${group.some((item) => item.id === state.selectedLink) ? 'selected' : ''}" data-link-id="${master.id}" tabindex="0" role="button" aria-label="Collegamento Socapex da ${esc(from.title)}"><path class="socapex-bus" d="M${startX},${from.y} H${busX} V${Math.min(...ys)} M${busX},${Math.min(...ys)} V${Math.max(...ys)}"/>${visibleTargets.map(({ node }) => `<path class="connector" d="M${busX},${node.y} H${node.x - NODE_HALF}"/>`).join('')}${labelMarkup}</g>`;
       return;
     }
-    const from = nodeById(link.from), to = nodeById(link.to); if (!from || !to || !ids.has(from.id)) return;
+    const from = nodeIndex.get(link.from), to = nodeIndex.get(link.to); if (!from || !to || !ids.has(from.id)) return;
     if (!ids.has(to.id)) { const pageNumber = printPageNumbers?.get(to.page) ?? to.page; markup += `<g class="link" data-link-id="${link.id}"><path class="connector" d="M${from.x + NODE_HALF},${from.y} H1050"/><rect class="page-jump" x="1060" y="${from.y - 22}" width="105" height="44"/><text class="page-jump-text" x="1112" y="${from.y + 5}">Pagina ${pageNumber}</text></g>`; return; }
-    const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = linkLaneX(link, from), label = linkLabelPosition(link, from, to);
+    const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = linkLaneX(link, from, outgoingDirect.get(from.id) || [link], nodeIndex), label = linkLabelPosition(link, from, to);
     const labelMarkup = `<g class="link-label" data-link-id="${link.id}"><rect class="label-hit" x="${label.x - 5}" y="${label.y - 17}" width="310" height="${label.lines.length * 19 + 10}"/>${label.lines.map((line, index) => `<text class="line-label" x="${label.x}" y="${label.y + index * 19}">${esc(line)}</text>`).join('')}</g>`;
     markup += `<g class="link ${state.selectedLink === link.id ? 'selected' : ''}" data-link-id="${link.id}" tabindex="0" role="button" aria-label="Collegamento da ${esc(from.title)} a ${esc(to.title)}"><path class="connector" d="M${startX},${from.y} H${midX} V${to.y} H${endX}"/>${labelMarkup}</g>`;
   });
   nodes.forEach((node) => {
     const lines = textLines(node), compact = node.type === 'load', lineHeight = compact ? 14 : 20, topPadding = compact ? 14 : 21, height = nodeDisplayHeight(node);
     const texts = lines.map((line, index) => `<text class="${index === 0 || (node.type === 'panel' && index === 2) ? 'node-title' : ''}" x="${node.x}" y="${node.y - height / 2 + topPadding + index * lineHeight}">${esc(line)}</text>`).join('');
-    markup += `<g class="node ${node.type} ${state.selectedIds.includes(node.id) ? 'selected' : ''}" data-id="${node.id}" tabindex="0" role="button" aria-label="${esc(node.title)}"><rect x="${node.x - NODE_HALF}" y="${node.y - height / 2}" width="${NODE_HALF * 2}" height="${height}"/>${texts}<circle class="link-handle" data-source="${node.id}" cx="${node.x + NODE_HALF}" cy="${node.y}" r="7" aria-hidden="true"/></g>`;
+    markup += `<g class="node ${node.type} ${selectedIds.has(node.id) ? 'selected' : ''}" data-id="${node.id}" tabindex="0" role="button" aria-label="${esc(node.title)}"><rect x="${node.x - NODE_HALF}" y="${node.y - height / 2}" width="${NODE_HALF * 2}" height="${height}"/>${texts}<circle class="link-handle" data-source="${node.id}" cx="${node.x + NODE_HALF}" cy="${node.y}" r="7" aria-hidden="true"/></g>`;
   });
   svg.innerHTML = markup;
   $('#page-label').textContent = `Pagina ${state.currentPage}`; $('#page-summary').textContent = `${nodes.length} elementi`;
@@ -303,7 +322,11 @@ function render() {
   renderInspector();
   updateDirtyUi();
 }
-function renderCatalog() { $('#cable-catalog').innerHTML = CABLES.filter((cable) => !cable.internal).map((cable) => `<div class="catalog-item"><strong>${cable.name}</strong>${cable.cable}</div>`).join(''); }
+function requestRender() {
+  if (renderFrame !== null) return;
+  renderFrame = requestAnimationFrame(() => { renderFrame = null; render(); });
+}
+function renderCatalog() { $('#cable-catalog').innerHTML = CATALOG_CABLES.map((cable) => `<div class="catalog-item"><strong>${cable.name}</strong>${cable.cable}</div>`).join(''); }
 function renderInspector() {
   const form = $('#property-form'), node = nodeById(state.selected), link = linkById(state.selectedLink);
   const selected = node || link; $('.empty-state').hidden = !!selected; form.hidden = !selected; $('#delete-selected').hidden = !selected;
@@ -414,7 +437,7 @@ function addBulkLoads() {
     const node = { id: uid(), type: 'load', page: state.currentPage, x: 835, y: 135 + index * 56, title: count === 1 ? title : `${title} ${start + index}`, subtitle: cableById(plugType).plug, plugType, details: `Assorbimento ${(watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`, socket: '', watts };
     state.nodes.push(node); nodes.push(node);
   }
-  let linked = 0; nodes.forEach((node) => { if (parentId && tryAddLink(parentId, node.id, plugType, 20, false)) linked++; });
+  let linked = 0; nodes.forEach((node) => { if (parentId && tryAddLink(parentId, node.id, plugType, 20, false, false)) linked++; });
   const extraPages = ensureLoadPageCapacity(state.currentPage, nodes.map((node) => node.id));
   $('#bulk-load-dialog').close(); state.selectedIds = nodes.filter((node) => node.page === state.currentPage).map((node) => node.id); state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; markChanged(); render(); showStatus(`Aggiunte ${count} utenze${parentId ? `, collegate ${linked}` : ''}${extraPages ? ` e distribuite su ${extraPages + 1} pagine` : ''}.`);
 }
@@ -489,29 +512,25 @@ function arrangeNodes(nodes, anchorX = 600) {
   const minCenter = 110 + ((columns - 1) * stepX) / 2, maxCenter = 1090 - ((columns - 1) * stepX) / 2, centerX = Math.max(minCenter, Math.min(maxCenter, anchorX)), startX = centerX - ((columns - 1) * stepX) / 2, startY = 390 - ((rows - 1) * stepY) / 2;
   items.forEach((node, index) => { const column = Math.floor(index / rows), row = index % rows; node.x = startX + column * stepX; node.y = startY + row * stepY; });
 }
-function nodesOverlap(first, second, gap = 18) {
-  return Math.abs(first.x - second.x) < NODE_HALF * 2 + gap && Math.abs(first.y - second.y) < (nodeDisplayHeight(first) + nodeDisplayHeight(second)) / 2 + gap;
-}
 function placeNewLoads(nodes, page) {
   const movingIds = new Set(nodes.map((node) => node.id));
-  const occupied = state.nodes.filter((node) => node.page === page && !movingIds.has(node.id));
+  const occupied = state.nodes.filter((node) => node.page === page && !movingIds.has(node.id)).map((node) => ({ x: node.x, y: node.y, height: nodeDisplayHeight(node) }));
   const preferredX = [835, 1080, 590, 345, 110];
   const preferredY = [115, 225, 335, 445, 555, 665];
   nodes.forEach((node) => {
     const height = nodeDisplayHeight(node);
-    const candidates = [
-      { x: node.x, y: node.y },
-      ...preferredX.flatMap((x) => preferredY.map((y) => ({ x, y }))),
-    ];
-    for (let x = 110; x <= 1090; x += 35) {
-      for (let y = Math.ceil(15 + height / 2); y <= Math.floor(735 - height / 2); y += 25) candidates.push({ x, y });
+    const isFree = (x, y) => x >= 110 && x <= 1090 && y - height / 2 >= 15 && y + height / 2 <= 735 && !occupied.some((item) => Math.abs(x - item.x) < NODE_HALF * 2 + 18 && Math.abs(y - item.y) < (height + item.height) / 2 + 18);
+    const preferred = [{ x: node.x, y: node.y }, ...preferredX.flatMap((x) => preferredY.map((y) => ({ x, y })))];
+    let position = preferred.find((candidate) => isFree(candidate.x, candidate.y));
+    if (!position) {
+      search: for (let x = 110; x <= 1090; x += 35) {
+        for (let y = Math.ceil(15 + height / 2); y <= Math.floor(735 - height / 2); y += 25) {
+          if (isFree(x, y)) { position = { x, y }; break search; }
+        }
+      }
     }
-    const position = candidates.find((candidate) => {
-      const placed = { ...node, x: candidate.x, y: candidate.y };
-      return candidate.x >= 110 && candidate.x <= 1090 && candidate.y - height / 2 >= 15 && candidate.y + height / 2 <= 735 && !occupied.some((item) => nodesOverlap(placed, item));
-    });
     if (position) { node.x = position.x; node.y = position.y; }
-    occupied.push(node);
+    occupied.push({ x: node.x, y: node.y, height });
   });
 }
 function createPhysicalReference(source, page) {
@@ -602,7 +621,7 @@ function importSelectedCaptureGroups() {
   checkpoint('import-capture');
   selected.forEach((group) => { index++; const node = { id: uid(), type: 'load', page: state.currentPage, x: 835, y: Math.min(650, 120 + index * 75), title: `Circuito ${group.circuit}`, subtitle: CABLES[0].plug, plugType: 'cee16mono', details: `Assorbimento ${(group.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`, socket: '', watts: group.watts, fixtures: group.fixtures }; state.nodes.push(node); importedIds.push(node.id); });
   if (useSocapex) ({ linked, groups: socapexGroups } = connectLoadsAsSocapex(parent, importedIds));
-  else if (parent) importedIds.forEach((id) => { if (tryAddLink(parent, id, 'cee16mono', 20, false)) linked++; });
+  else if (parent) importedIds.forEach((id) => { if (tryAddLink(parent, id, 'cee16mono', 20, false, false)) linked++; });
   const extraPages = ensureLoadPageCapacity(state.currentPage, importedIds);
   $('#capture-import-dialog').close(); state.selectedIds = importedIds.filter((id) => nodeById(id)?.page === state.currentPage); state.selected = state.selectedIds.at(-1) || null; markChanged(); render(); showStatus(`Importati ${selected.length} circuiti${parent ? `, collegati ${linked}${useSocapex ? ` in ${socapexGroups} Socapex` : ''}` : ''}${parent && linked < selected.length ? `; ${selected.length - linked} senza collegamento per mancanza di prese libere` : ''}${extraPages ? `, distribuiti su ${extraPages + 1} pagine` : ''}.`);
 }
@@ -646,7 +665,7 @@ function createBulkConnections() {
     }
   }
   const incompatible = targets.map((node) => compatibilityWarning(parent, node)).find(Boolean); if (incompatible) return showStatus(incompatible);
-  checkpoint('bulk-connect'); targets.forEach((node) => tryAddLink(parent.id, node.id, requiredPlug(node), 20, false));
+  checkpoint('bulk-connect'); targets.forEach((node) => tryAddLink(parent.id, node.id, requiredPlug(node), 20, false, false));
   $('#bulk-connect-dialog').close(); state.selectedIds = [parent.id, ...targetIds]; state.selected = parent.id; state.selectedLink = null; markChanged(); render(); showStatus(`Collegate ${targetIds.length} utenz${targetIds.length === 1 ? 'a' : 'e'}.`);
 }
 function openArrangeDialog() {
@@ -812,8 +831,13 @@ function titleBlockMarkup(page, total) {
   return `<footer class="title-block"><div><small>Ditta esecutrice</small><strong>${esc(state.meta.company || '—')}</strong><span>${esc(state.meta.companyAddress || '—')}</span>${state.meta.companyVat ? `<span>P. IVA ${esc(state.meta.companyVat)}</span>` : ''}</div><div><small>Descrizione</small><strong>${esc(state.meta.type || '—')}</strong></div><div><small>Evento</small><strong>${esc(state.meta.name || '—')}</strong></div><div><small>Luogo</small><strong>${esc(state.meta.location || '—')}</strong></div><div><small>Versione</small><strong>${esc(state.meta.revision || '1.0')}</strong><small>Pagina ${page} di ${total}</small></div></footer>`;
 }
 function splitIntoPages(items, size) { return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size)); }
+function groupBy(items, keyFor) {
+  const groups = new Map();
+  items.forEach((item) => { const key = keyFor(item); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(item); });
+  return groups;
+}
 function splitIndexEntries(entries, size = 5) {
-  const pageGroups = [...new Map(entries.map((entry) => [entry.page, entries.filter((item) => item.page === entry.page)])).values()], result = []; let current = [];
+  const pageGroups = [...groupBy(entries, (entry) => entry.page).values()], result = []; let current = [];
   pageGroups.forEach((group) => {
     if (current.length && current.length + group.length > size) { result.push(current); current = []; }
     if (group.length > size) { if (current.length) { result.push(current); current = []; } result.push(...splitIntoPages(group, size)); }
@@ -878,7 +902,7 @@ function indexMarkup(group, topology, indexPage, total, diagramOffset, indexTota
     const node = topology.canonical.get(key), center = centers.get(key), size = dimensions.get(key), textStart = center.y - ((size.lines.length - 1) * 17) / 2 + 5;
     return `<rect class="index-node" x="${center.x - size.width / 2}" y="${center.y - size.height / 2}" width="${size.width}" height="${size.height}"/>${size.lines.map((line, lineIndex) => `<text class="index-node-text ${lineIndex === 0 ? 'index-node-title' : ''}" x="${center.x}" y="${textStart + lineIndex * 17}">${esc(line)}</text>`).join('')}`;
   }).join('');
-  const pageX = 1080, pageWidth = 130, pages = [...new Map(entries.map((entry) => [entry.page, entries.filter((item) => item.page === entry.page)])).entries()], pageMarkup = pages.map(([page, pageEntries]) => {
+  const pageX = 1080, pageWidth = 130, pages = [...groupBy(entries, (entry) => entry.page).entries()], pageMarkup = pages.map(([page, pageEntries]) => {
     const yValues = pageEntries.map((entry) => rowByEntry.get(entry)), y = yValues.reduce((sum, value) => sum + value, 0) / yValues.length, mergeX = 950, diagramIndex = diagramPages.indexOf(page), printedPage = diagramOffset + diagramIndex + 1, lines = pageEntries.map((entry) => { const center = centers.get(entry.panelKey), size = dimensions.get(entry.panelKey); return `<path class="index-page-branch" d="M${center.x + size.width / 2},${center.y} H${mergeX} V${y}"/>`; }).join('');
     return `${lines}<path class="index-connector" marker-end="url(#index-arrow-${indexPage})" d="M${mergeX},${y} H${pageX - pageWidth / 2}"/><rect class="index-page-box" x="${pageX - pageWidth / 2}" y="${y - 30}" width="${pageWidth}" height="60"/><text class="index-page-text" x="${pageX}" y="${y + 5}">Pagina ${printedPage}</text>`;
   }).join('');
@@ -901,7 +925,7 @@ async function preparePrint() {
 }
 function svgPoint(event) { const svg = $('#diagram'), point = svg.createSVGPoint(); point.x = event.clientX; point.y = event.clientY; return point.matrixTransform(svg.getScreenCTM().inverse()); }
 function snapToAlignmentGuides(node, references) {
-  const threshold = 12, closest = (value, axis) => references.map((item) => item[axis]).sort((first, second) => Math.abs(first - value) - Math.abs(second - value))[0];
+  const threshold = 12, closest = (value, axis) => references.reduce((best, item) => best === undefined || Math.abs(item[axis] - value) < Math.abs(best - value) ? item[axis] : best, undefined);
   const guideX = closest(node.x, 'x'), guideY = closest(node.y, 'y');
   if (guideX !== undefined && Math.abs(guideX - node.x) <= threshold) { node.x = guideX; alignmentGuides.push({ axis: 'x', value: guideX }); }
   if (guideY !== undefined && Math.abs(guideY - node.y) <= threshold) { node.y = guideY; alignmentGuides.push({ axis: 'y', value: guideY }); }
@@ -919,7 +943,7 @@ function bindDiagram() {
       const link = linkById(labelGroup.dataset.linkId), from = nodeById(link.from), to = nodeById(link.to), current = linkLabelPosition(link, from, to), start = svgPoint(event), offset = { x: start.x - current.x, y: start.y - current.y };
       let moved = false; checkpoint('move-link-label');
       state.selectedLink = link.id; state.selected = null; state.selectedIds = [];
-      const move = (next) => { moved = true; const point = svgPoint(next); link.labelX = Math.max(10, Math.min(875, point.x - offset.x)); link.labelY = Math.max(22, Math.min(720, point.y - offset.y)); render(); };
+      const move = (next) => { moved = true; const point = svgPoint(next); link.labelX = Math.max(10, Math.min(875, point.x - offset.x)); link.labelY = Math.max(22, Math.min(720, point.y - offset.y)); requestRender(); };
       const stop = () => { if (moved) markChanged(); else dropNoopHistory(); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); render(); return;
     }
     if (linkGroup) { state.selectedLink = linkGroup.dataset.linkId; state.selected = null; state.selectedIds = []; render(); return; }
@@ -934,7 +958,7 @@ function bindDiagram() {
     if (additive) { selectNode(nodeId, true); render(); return; }
     if (!state.selectedIds.includes(nodeId)) selectNode(nodeId); else { state.selected = nodeId; state.selectedLink = null; }
     const node = nodeById(nodeId), start = svgPoint(event), positions = selectedNodes().map((item) => ({ node: item, x: item.x, y: item.y })), references = pageNodes().filter((item) => !state.selectedIds.includes(item.id)); let moved = false; checkpoint('move-nodes');
-    const move = (next) => { moved = true; const point = svgPoint(next), dx = point.x - start.x, dy = point.y - start.y; alignmentGuides = []; positions.forEach(({ node: item, x, y }) => { item.x = Math.max(85, Math.min(1115, x + dx)); item.y = Math.max(55, Math.min(700, y + dy)); snapToAlignmentGuides(item, references); }); alignmentGuides = alignmentGuides.filter((guide, index, guides) => guides.findIndex((item) => item.axis === guide.axis && item.value === guide.value) === index); render(); };
+    const move = (next) => { moved = true; const point = svgPoint(next), dx = point.x - start.x, dy = point.y - start.y; alignmentGuides = []; positions.forEach(({ node: item, x, y }) => { item.x = Math.max(85, Math.min(1115, x + dx)); item.y = Math.max(55, Math.min(700, y + dy)); snapToAlignmentGuides(item, references); }); alignmentGuides = alignmentGuides.filter((guide, index, guides) => guides.findIndex((item) => item.axis === guide.axis && item.value === guide.value) === index); requestRender(); };
     const stop = () => { if (moved) markChanged(); else dropNoopHistory(); alignmentGuides = []; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); render(); }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); render();
   });
   $('#diagram').addEventListener('keydown', (event) => {
@@ -950,6 +974,17 @@ function bindDiagram() {
     }
   });
 }
+function removeLinksAndReleaseSockets(predicate) {
+  const removed = state.links.filter(predicate);
+  removed.forEach((link) => {
+    if (isReferenceLink(link)) return;
+    const source = nodeById(link.from), target = nodeById(link.to);
+    if (source?.type === 'panel' && target) target.socket = '';
+  });
+  const removedIds = new Set(removed.map((link) => link.id));
+  state.links = state.links.filter((link) => !removedIds.has(link.id));
+  return removed;
+}
 function deleteSelection() {
   const selectedLink = linkById(state.selectedLink);
   const deletedIds = state.selected ? (state.selectedIds.length > 1 ? state.selectedIds : [state.selected]) : [];
@@ -958,11 +993,12 @@ function deleteSelection() {
   if (!selectedLink && !deletedIds.length) return;
   checkpoint('delete');
   if (selectedLink) {
-    const links = selectedLink.socapexGroup ? state.links.filter((item) => item.socapexGroup === selectedLink.socapexGroup) : [selectedLink];
-    links.forEach((link) => { const target = nodeById(link.to); if (target && !isReferenceLink(link)) target.socket = ''; });
-    const linkIds = new Set(links.map((link) => link.id)); state.links = state.links.filter((item) => !linkIds.has(item.id)); state.selectedLink = null;
+    const groupKey = socapexLinkKey(selectedLink);
+    removeLinksAndReleaseSockets((link) => link.id === selectedLink.id || (groupKey && socapexLinkKey(link) === groupKey));
+    state.selectedLink = null;
   } else {
-    state.links = state.links.filter((link) => !deletedIds.includes(link.from) && !deletedIds.includes(link.to));
+    const deleted = new Set(deletedIds);
+    removeLinksAndReleaseSockets((link) => deleted.has(link.from) || deleted.has(link.to));
     state.nodes = state.nodes.filter((node) => !deletedIds.includes(node.id)); state.selected = null; state.selectedIds = [];
   }
   markChanged('Elemento eliminato.'); render();
@@ -974,7 +1010,7 @@ function removeCurrentPage() {
   if (nodes.length && !window.confirm(`Eliminare pagina ${state.currentPage} e i suoi ${nodes.length} elementi? L’operazione può essere annullata.`)) return;
   checkpoint('delete-page');
   const removedPage = state.currentPage, removedIds = new Set(nodes.map((node) => node.id));
-  state.links = state.links.filter((link) => !removedIds.has(link.from) && !removedIds.has(link.to));
+  removeLinksAndReleaseSockets((link) => removedIds.has(link.from) || removedIds.has(link.to));
   state.nodes = state.nodes.filter((node) => node.page !== removedPage);
   state.nodes.forEach((node) => { if (node.page > removedPage) node.page--; });
   state.pages = pages.filter((page) => page !== removedPage).map((page) => page > removedPage ? page - 1 : page);
@@ -1088,8 +1124,7 @@ function bind() {
     if (event.target.id === 'duplicate-load') duplicateSelectedLoads();
     if (event.target.id === 'unlink-selected') {
       checkpoint('unlink');
-      state.links.filter((link) => link.to === state.selected).forEach((link) => { const target = nodeById(link.to); if (target) target.socket = ''; });
-      state.links = state.links.filter((link) => link.to !== state.selected); markChanged('Elemento scollegato.'); render();
+      removeLinksAndReleaseSockets((link) => link.to === state.selected); markChanged('Elemento scollegato.'); render();
     }
   });
   $('#delete-selected').onclick = deleteSelection;
@@ -1118,8 +1153,9 @@ function bind() {
   $('#open-project').addEventListener('change', async (event) => {
     const file = event.target.files[0]; if (!file) return;
     if (dirty && !window.confirm('Aprire un altro progetto? Le modifiche correnti restano disponibili nel salvataggio automatico.')) { event.target.value = ''; return; }
-    loadProjectText(await file.text());
-    event.target.value = '';
+    try { loadProjectText(await file.text()); }
+    catch (error) { showStatus(`Impossibile leggere il file: ${error.message}`); }
+    finally { event.target.value = ''; }
   });
   $('#undo-action').onclick = undo;
   $('#redo-action').onclick = redo;

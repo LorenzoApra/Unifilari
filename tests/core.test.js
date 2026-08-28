@@ -79,6 +79,26 @@ const load = node({ id: 'load-1', type: 'load', plugType: 'cee16mono', watts: 10
 }
 
 {
+  const firstLoad = node({ ...load, id: 'load-socket-a', socket: 'P1' });
+  const secondLoad = node({ ...load, id: 'load-socket-b', socket: 'P1' });
+  const twoPortPanel = node({ ...mainPanel, id: 'panel-sockets', panelKey: 'panel-sockets-key', ports: [{ type: 'cee16mono', quantity: 2 }] });
+  const current = project([twoPortPanel, firstLoad, secondLoad], [
+    { id: 'link-socket-a', from: twoPortPanel.id, to: firstLoad.id, cable: 'cee16mono', length: 20 },
+    { id: 'link-socket-b', from: twoPortPanel.id, to: secondLoad.id, cable: 'cee16mono', length: 20 },
+  ]);
+  const issues = Core.validateProject(current);
+  assert.equal(issues.some((issue) => issue.code === 'invalid-socket'), true);
+}
+
+{
+  const connectedLoad = node({ ...load, id: 'load-current-socket', socket: 'P1' });
+  const twoPortPanel = node({ ...mainPanel, id: 'panel-current-socket', panelKey: 'panel-current-socket-key', ports: [{ type: 'cee16mono', quantity: 2 }] });
+  const currentLink = { id: 'link-current-socket', from: twoPortPanel.id, to: connectedLoad.id, cable: 'cee16mono', length: 20 };
+  const current = project([twoPortPanel, connectedLoad], [currentLink]);
+  assert.equal(Core.availablePanelSockets(current, twoPortPanel, connectedLoad, currentLink.id).some((socket) => socket.name === 'P1'), true);
+}
+
+{
   assert.throws(
     () => Core.normalizeProject({ meta: {}, pages: [1], nodes: [{ ...load, id: 'unsafe id with spaces' }], links: [] }),
     /identificativo/i,

@@ -59,8 +59,12 @@
     return null;
   }
 
-  function nodeById(project, id) {
-    return (project.nodes || []).find((node) => node.id === id);
+  function createNodeIndex(project) {
+    return new Map((project.nodes || []).map((node) => [node.id, node]));
+  }
+
+  function nodeById(project, id, nodeIndex = null) {
+    return nodeIndex ? nodeIndex.get(id) : (project.nodes || []).find((node) => node.id === id);
   }
 
   function supplyKey(node) {
@@ -100,32 +104,32 @@
     );
   }
 
-  function availablePanelSockets(project, panel, target, ignoredLinkId = null) {
+  function availablePanelSockets(project, panel, target, ignoredLinkId = null, nodeIndex = null) {
     const required = requiredPlug(target);
     const used = new Set(
       (project.links || [])
         .filter((link) => {
           if (isReferenceLink(link) || link.id === ignoredLinkId) return false;
-          return panelKey(nodeById(project, link.from)) === panelKey(panel);
+          return panelKey(nodeById(project, link.from, nodeIndex)) === panelKey(panel);
         })
-        .map((link) => nodeById(project, link.to)?.socket)
+        .map((link) => nodeById(project, link.to, nodeIndex)?.socket)
         .filter(Boolean),
     );
     return panelSockets(panel).filter(
       (socket) =>
         compatibleConnector(socket.type, required) &&
-        (!used.has(socket.name) || (ignoredLinkId && socket.name === target?.socket)),
+        !used.has(socket.name),
     );
   }
 
-  function socketWarning(project, panel, target, socket, ignoredLinkId = null, cableName = (id) => id) {
+  function socketWarning(project, panel, target, socket, ignoredLinkId = null, cableName = (id) => id, nodeIndex = null) {
     if (panel?.type !== 'panel' || !socket) return '';
     const required = requiredPlug(target);
     const matching = panelSockets(panel).filter((item) => compatibleConnector(item.type, required));
     if (!matching.some((item) => item.name === socket)) {
       return `La presa ${socket} non è compatibile con ${cableName(required)}.`;
     }
-    if (!availablePanelSockets(project, panel, target, ignoredLinkId).some((item) => item.name === socket)) {
+    if (!availablePanelSockets(project, panel, target, ignoredLinkId, nodeIndex).some((item) => item.name === socket)) {
       return `La presa ${socket} del quadro ${panel.title} è già occupata.`;
     }
     return '';
@@ -160,8 +164,9 @@
   function validateConnection(project, candidate, options = {}) {
     const ignoredLinkId = options.ignoredLinkId || null;
     const cableName = options.cableName || ((id) => id);
-    const from = nodeById(project, candidate.from);
-    const to = nodeById(project, candidate.to);
+    const nodeIndex = options.nodeIndex || createNodeIndex(project);
+    const from = nodeById(project, candidate.from, nodeIndex);
+    const to = nodeById(project, candidate.to, nodeIndex);
     if (!from || !to) return connectionFailure('Il collegamento contiene un elemento inesistente.', 'missing-endpoint');
     if (candidate.from === candidate.to) return connectionFailure('Un elemento non può essere collegato a sé stesso.', 'self-link');
     if (isReferenceLink(candidate)) return { ok: true };
@@ -207,8 +212,8 @@
         .reduce((sum, port) => sum + asPositiveInteger(port.quantity, 1, 500), 0);
       const used = (project.links || []).filter((link) => {
         if (isReferenceLink(link) || link.id === ignoredLinkId) return false;
-        const source = nodeById(project, link.from);
-        const target = nodeById(project, link.to);
+        const source = nodeById(project, link.from, nodeIndex);
+        const target = nodeById(project, link.to, nodeIndex);
         return samePhysicalSource(source, from) && compatibleConnector(requiredPlug(target), required);
       }).length;
       if (!capacity) {
@@ -224,7 +229,7 @@
 
     const alreadyIncoming = (project.links || []).some((link) => {
       if (isReferenceLink(link) || link.id === ignoredLinkId) return false;
-      return samePhysicalTarget(nodeById(project, link.to), to);
+      return samePhysicalTarget(nodeById(project, link.to, nodeIndex), to);
     });
     if (alreadyIncoming) {
       return connectionFailure(
@@ -242,6 +247,7 @@
   function validateProject(project, options = {}) {
     const issues = [];
     const ids = new Set();
+    const nodeIndex = createNodeIndex(project);
     (project.nodes || []).forEach((node) => {
       if (ids.has(node.id)) issues.push({ code: 'duplicate-node', message: `Identificativo duplicato: ${node.id}.` });
       ids.add(node.id);
@@ -251,15 +257,15 @@
         issues.push({ code: 'orphan-link', linkId: link.id, message: 'Un collegamento punta a un elemento inesistente.' });
         return;
       }
-      const result = validateConnection(project, link, { ...options, ignoredLinkId: link.id });
+      const result = validateConnection(project, link, { ...options, ignoredLinkId: link.id, nodeIndex });
       if (!result.ok) issues.push({ code: result.code, linkId: link.id, message: result.message });
       if (!isReferenceLink(link)) {
-        const target = nodeById(project, link.to);
-        const source = nodeById(project, link.from);
+        const target = nodeById(project, link.to, nodeIndex);
+        const source = nodeById(project, link.from, nodeIndex);
         if (source?.type === 'panel' && !target?.socket) {
           issues.push({ code: 'missing-socket', linkId: link.id, message: `${target?.title || 'La destinazione'} non ha una presa assegnata.` });
         } else {
-          const warning = socketWarning(project, source, target, target?.socket, link.id, options.cableName);
+          const warning = socketWarning(project, source, target, target?.socket, link.id, options.cableName, nodeIndex);
           if (warning) issues.push({ code: 'invalid-socket', linkId: link.id, message: warning });
         }
       }
