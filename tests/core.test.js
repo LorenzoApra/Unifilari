@@ -113,6 +113,13 @@ const load = node({ id: 'load-1', type: 'load', plugType: 'cee16mono', watts: 10
 }
 
 {
+  const routedLink = { id: 'link-routed', from: mainPanel.id, to: load.id, cable: 'cee16mono', length: 20, routePoints: [{ x: 420, y: 150 }, { x: 420, y: 310 }] };
+  const normalized = Core.normalizeProject(project([mainPanel, load], [routedLink]));
+  assert.deepEqual(normalized.links[0].routePoints, routedLink.routePoints);
+  assert.deepEqual(Core.serializeProject(normalized).links[0].routePoints, routedLink.routePoints);
+}
+
+{
   const latePageLoad = { ...load, id: 'late-load', page: 99 };
   const normalized = Core.normalizeProject({ meta: {}, pages: [1, 99], currentPage: 99, nodes: [latePageLoad], links: [] });
   assert.deepEqual(normalized.pages, [1, 2]);

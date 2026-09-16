@@ -329,6 +329,15 @@
     if (raw.socapexGroup) link.socapexGroup = assertSafeId(raw.socapexGroup, 'Il gruppo Socapex');
     if (Number.isFinite(Number(raw.labelX))) link.labelX = asFiniteNumber(raw.labelX, 0, 0, 1200);
     if (Number.isFinite(Number(raw.labelY))) link.labelY = asFiniteNumber(raw.labelY, 0, 0, 780);
+    if (Array.isArray(raw.routePoints) && raw.routePoints.length >= 2) {
+      link.routePoints = raw.routePoints.slice(0, 64).map((point) => {
+        if (!isPlainObject(point)) throw new Error('Il progetto contiene un punto di percorso non valido.');
+        return {
+          x: asFiniteNumber(point.x, 600, 0, 1200),
+          y: asFiniteNumber(point.y, 390, 0, 780),
+        };
+      });
+    }
     return link;
   }
 

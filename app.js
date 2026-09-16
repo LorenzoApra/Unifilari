@@ -193,6 +193,61 @@ function linkLaneX(link, from, siblings, nodeIndex) {
   const index = siblings.findIndex((item) => item.id === link.id), startX = from.x + NODE_HALF, closestTargetX = Math.min(...siblings.map((item) => (nodeIndex.get(item.to)?.x || 0) - NODE_HALF));
   return Math.round(startX + 28 + ((index + 1) * Math.max(24, closestTargetX - startX - 56)) / (siblings.length + 1));
 }
+function directLinkSiblings(link, nodeIndex) {
+  const targetPage = nodeIndex.get(link.to)?.page;
+  return state.links
+    .filter((item) => !item.socapexGroup && item.from === link.from && nodeIndex.get(item.to)?.page === targetPage)
+    .sort((first, second) => (nodeIndex.get(first.to)?.y || 0) - (nodeIndex.get(second.to)?.y || 0));
+}
+function linkRoutePoints(link, from, to, nodeIndex, siblings = directLinkSiblings(link, nodeIndex)) {
+  const start = { x: from.x + NODE_HALF, y: from.y }, end = { x: to.x - NODE_HALF, y: to.y };
+  if (!Array.isArray(link.routePoints) || link.routePoints.length < 2) {
+    const midX = linkLaneX(link, from, siblings, nodeIndex);
+    return [start, { x: midX, y: start.y }, { x: midX, y: end.y }, end];
+  }
+  const route = link.routePoints.map((point) => ({ x: Number(point.x), y: Number(point.y) }));
+  route[0].y = start.y;
+  route[route.length - 1].y = end.y;
+  return [start, ...route, end];
+}
+function routePath(points) {
+  return points.map((point, index) => `${index ? 'L' : 'M'}${Math.round(point.x * 10) / 10},${Math.round(point.y * 10) / 10}`).join(' ');
+}
+function routeHandlesMarkup(link, points) {
+  if (state.selectedLink !== link.id || link.socapexGroup) return '';
+  return points.slice(1, -2).map((point, offset) => {
+    const segmentIndex = offset + 1, next = points[segmentIndex + 1], dx = next.x - point.x, dy = next.y - point.y;
+    if (Math.hypot(dx, dy) < 8) return '';
+    const vertical = Math.abs(dy) >= Math.abs(dx), x = (point.x + next.x) / 2, y = (point.y + next.y) / 2;
+    return `<rect class="route-handle ${vertical ? 'vertical' : 'horizontal'}" data-link-id="${link.id}" data-segment-index="${segmentIndex}" data-orientation="${vertical ? 'vertical' : 'horizontal'}" x="${x - (vertical ? 6 : 10)}" y="${y - (vertical ? 10 : 6)}" width="${vertical ? 12 : 20}" height="${vertical ? 20 : 12}" rx="3"><title>Trascina per spostare questo tratto</title></rect>`;
+  }).join('');
+}
+function addLinkDetour(link) {
+  const from = nodeById(link.from), to = nodeById(link.to); if (!from || !to || link.socapexGroup) return false;
+  const nodeIndex = new Map(state.nodes.map((node) => [node.id, node])), points = linkRoutePoints(link, from, to, nodeIndex);
+  const candidates = [];
+  for (let index = 1; index < points.length - 2; index += 1) {
+    const first = points[index], second = points[index + 1], length = Math.hypot(second.x - first.x, second.y - first.y);
+    if (length >= 12) candidates.push({ index, first, second, length });
+  }
+  if (!candidates.length) {
+    const start = points[0], end = points.at(-1), firstX = start.x + (end.x - start.x) * .3, secondX = start.x + (end.x - start.x) * .7;
+    const direction = start.y > 660 ? -1 : 1, detourY = Math.max(20, Math.min(760, start.y + direction * 80));
+    link.routePoints = [{ x: firstX, y: start.y }, { x: firstX, y: detourY }, { x: secondX, y: detourY }, { x: secondX, y: end.y }];
+    return true;
+  }
+  const chosen = candidates.sort((first, second) => second.length - first.length)[0], full = points.map((point) => ({ ...point }));
+  const vertical = Math.abs(chosen.second.y - chosen.first.y) >= Math.abs(chosen.second.x - chosen.first.x);
+  if (vertical) {
+    const middle = (chosen.first.y + chosen.second.y) / 2, direction = chosen.first.x > 1050 ? -1 : 1, sideX = Math.max(20, Math.min(1180, chosen.first.x + direction * 70));
+    full.splice(chosen.index + 1, 0, { x: chosen.first.x, y: middle }, { x: sideX, y: middle }, { x: sideX, y: chosen.second.y });
+  } else {
+    const middle = (chosen.first.x + chosen.second.x) / 2, direction = chosen.first.y > 660 ? -1 : 1, sideY = Math.max(20, Math.min(760, chosen.first.y + direction * 70));
+    full.splice(chosen.index + 1, 0, { x: middle, y: chosen.first.y }, { x: middle, y: sideY }, { x: chosen.second.x, y: sideY });
+  }
+  link.routePoints = full.slice(1, -1);
+  return true;
+}
 function cableOptionMarkup(cables, selected) { return cables.map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
 function nodeOptions(selected) { return pageNodes().map((node) => `<option value="${node.id}" ${node.id === selected ? 'selected' : ''}>${esc(node.title)}${node.socket ? ` (${node.socket})` : ''}</option>`).join(''); }
 function cableOptions(selected) { return cableOptionMarkup(LINE_CABLES, selected); }
@@ -302,9 +357,9 @@ function render() {
     }
     const from = nodeIndex.get(link.from), to = nodeIndex.get(link.to); if (!from || !to || !ids.has(from.id)) return;
     if (!ids.has(to.id)) { const pageNumber = printPageNumbers?.get(to.page) ?? to.page; markup += `<g class="link" data-link-id="${link.id}"><path class="connector" d="M${from.x + NODE_HALF},${from.y} H1050"/><rect class="page-jump" x="1060" y="${from.y - 22}" width="105" height="44"/><text class="page-jump-text" x="1112" y="${from.y + 5}">Pagina ${pageNumber}</text></g>`; return; }
-    const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = linkLaneX(link, from, outgoingDirect.get(from.id) || [link], nodeIndex), label = linkLabelPosition(link, from, to);
+    const points = linkRoutePoints(link, from, to, nodeIndex, outgoingDirect.get(from.id) || [link]), path = routePath(points), label = linkLabelPosition(link, from, to);
     const labelMarkup = `<g class="link-label" data-link-id="${link.id}"><rect class="label-hit" x="${label.x - 5}" y="${label.y - 17}" width="310" height="${label.lines.length * 19 + 10}"/>${label.lines.map((line, index) => `<text class="line-label" x="${label.x}" y="${label.y + index * 19}">${esc(line)}</text>`).join('')}</g>`;
-    markup += `<g class="link ${state.selectedLink === link.id ? 'selected' : ''}" data-link-id="${link.id}" tabindex="0" role="button" aria-label="Collegamento da ${esc(from.title)} a ${esc(to.title)}"><path class="connector" d="M${startX},${from.y} H${midX} V${to.y} H${endX}"/>${labelMarkup}</g>`;
+    markup += `<g class="link ${state.selectedLink === link.id ? 'selected' : ''}" data-link-id="${link.id}" tabindex="0" role="button" aria-label="Collegamento da ${esc(from.title)} a ${esc(to.title)}"><path class="connector-hit" d="${path}"/><path class="connector" d="${path}"/>${routeHandlesMarkup(link, points)}${labelMarkup}</g>`;
   });
   nodes.forEach((node) => {
     const lines = textLines(node), compact = node.type === 'load', lineHeight = compact ? 14 : 20, topPadding = compact ? 14 : 21, height = nodeDisplayHeight(node);
@@ -333,7 +388,10 @@ function renderInspector() {
   if (!selected) return;
   if (link) {
     const from = nodeById(link.from), to = nodeById(link.to), reference = isReferenceLink(link);
-    form.innerHTML = `${reference ? `<div class="read-only">Collegamento richiamato: non impegna ulteriormente prese o ingressi.</div><label>Da<div class="read-only">${esc(from?.title || '—')}</div></label><label>A<div class="read-only">${esc(to?.title || '—')}</div></label>` : `<label>Da<select name="from">${nodeOptions(link.from)}</select></label><label>A<select name="to">${nodeOptions(link.to)}</select></label>`}<label>Linea<select name="cable">${cableOptions(link.cable)}</select></label><label>Lunghezza (m)<input name="length" type="number" min="0" step="0.5" value="${link.length}" /></label><span class="field-help">Puoi eliminare questo collegamento con il pulsante in alto.</span>`;
+    const routeEditor = !link.socapexGroup && from && to && from.page === to.page
+      ? `<div class="route-editor"><strong>Percorso linea</strong><span>Trascina le maniglie blu sui tratti della linea per cambiarne il giro.</span><div><button type="button" class="button" id="add-link-detour">Aggiungi deviazione</button><button type="button" class="button" id="reset-link-route" ${link.routePoints ? '' : 'disabled'}>Percorso automatico</button></div></div>`
+      : '';
+    form.innerHTML = `${reference ? `<div class="read-only">Collegamento richiamato: non impegna ulteriormente prese o ingressi.</div><label>Da<div class="read-only">${esc(from?.title || '—')}</div></label><label>A<div class="read-only">${esc(to?.title || '—')}</div></label>` : `<label>Da<select name="from">${nodeOptions(link.from)}</select></label><label>A<select name="to">${nodeOptions(link.to)}</select></label>`}<label>Linea<select name="cable">${cableOptions(link.cable)}</select></label><label>Lunghezza (m)<input name="length" type="number" min="0" step="0.5" value="${link.length}" /></label>${routeEditor}<span class="field-help">Puoi spostare anche la descrizione trascinandola. Elimina il collegamento con il pulsante in alto.</span>`;
     return;
   }
   const hasIncoming = state.links.some((item) => item.to === node.id);
@@ -940,9 +998,40 @@ function snapToAlignmentGuides(node, references) {
   if (guideX !== undefined && Math.abs(guideX - node.x) <= threshold) { node.x = guideX; alignmentGuides.push({ axis: 'x', value: guideX }); }
   if (guideY !== undefined && Math.abs(guideY - node.y) <= threshold) { node.y = guideY; alignmentGuides.push({ axis: 'y', value: guideY }); }
 }
+function beginRouteSegmentDrag(event, handle) {
+  const link = linkById(handle.dataset.linkId), from = nodeById(link?.from), to = nodeById(link?.to);
+  if (!link || !from || !to || link.socapexGroup) return;
+  event.preventDefault(); event.stopPropagation();
+  const nodeIndex = new Map(state.nodes.map((node) => [node.id, node])), basePoints = linkRoutePoints(link, from, to, nodeIndex).map((point) => ({ ...point }));
+  const segmentIndex = Number(handle.dataset.segmentIndex), vertical = handle.dataset.orientation === 'vertical', start = svgPoint(event);
+  if (!Number.isInteger(segmentIndex) || segmentIndex < 1 || segmentIndex >= basePoints.length - 2) return;
+  checkpoint(`move-link-route-${link.id}`);
+  state.selectedLink = link.id; state.selected = null; state.selectedIds = [];
+  let moved = false;
+  const move = (next) => {
+    const point = svgPoint(next), delta = vertical ? point.x - start.x : point.y - start.y, updated = basePoints.map((item) => ({ ...item }));
+    if (Math.abs(delta) < .5) return;
+    moved = true;
+    if (vertical) {
+      const x = Math.max(20, Math.min(1180, basePoints[segmentIndex].x + delta));
+      updated[segmentIndex].x = x; updated[segmentIndex + 1].x = x;
+    } else {
+      const y = Math.max(20, Math.min(760, basePoints[segmentIndex].y + delta));
+      updated[segmentIndex].y = y; updated[segmentIndex + 1].y = y;
+    }
+    link.routePoints = updated.slice(1, -1);
+    requestRender();
+  };
+  const stop = () => {
+    if (moved) markChanged('Percorso della linea aggiornato.'); else dropNoopHistory();
+    window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); render();
+  };
+  window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop);
+}
 function bindDiagram() {
   $('#diagram').addEventListener('pointerdown', (event) => {
-    const handle = event.target.closest('.link-handle'); const labelGroup = event.target.closest('.link-label'); const linkGroup = event.target.closest('.link'); const nodeGroup = event.target.closest('.node');
+    const routeHandle = event.target.closest('.route-handle'); const handle = event.target.closest('.link-handle'); const labelGroup = event.target.closest('.link-label'); const linkGroup = event.target.closest('.link'); const nodeGroup = event.target.closest('.node');
+    if (routeHandle) { beginRouteSegmentDrag(event, routeHandle); return; }
     if (handle) {
       event.stopPropagation(); const source = handle.dataset.source, svg = $('#diagram'), from = nodeById(source), draft = document.createElementNS('http://www.w3.org/2000/svg', 'path'); draft.setAttribute('class', 'connector'); draft.setAttribute('id', 'link-draft'); draft.setAttribute('d', `M${from.x + NODE_HALF},${from.y} L${from.x + NODE_HALF},${from.y}`); svg.append(draft);
       const move = (next) => { const point = svgPoint(next); draft.setAttribute('d', `M${from.x + NODE_HALF},${from.y} L${point.x},${point.y}`); };
@@ -1120,6 +1209,7 @@ function bind() {
         Object.assign(link, before); if (oldTarget) oldTarget.socket = oldSocket; if (newTarget && newTarget !== oldTarget) newTarget.socket = newTargetSocket;
         dropNoopHistory(); showStatus(warning || 'Modifica del collegamento non valida.'); render(); return;
       }
+      if (changesEndpoint) delete link.routePoints;
       markChanged(); showStatus('Collegamento aggiornato.'); render(); return;
     }
     if (node && ['socket', 'manualSocket'].includes(name)) {
@@ -1130,6 +1220,16 @@ function bind() {
     if (node) { markChanged(); render(); }
   });
   $('#property-form').addEventListener('click', (event) => {
+    if (event.target.id === 'add-link-detour') {
+      const link = linkById(state.selectedLink); if (!link) return;
+      checkpoint(`add-link-detour-${link.id}`);
+      if (addLinkDetour(link)) { markChanged('Deviazione aggiunta: trascina le maniglie blu per regolarla.'); render(); }
+      else dropNoopHistory();
+    }
+    if (event.target.id === 'reset-link-route') {
+      const link = linkById(state.selectedLink); if (!link?.routePoints) return;
+      checkpoint(`reset-link-route-${link.id}`); delete link.routePoints; markChanged('Ripristinato il percorso automatico.'); render();
+    }
     if (event.target.id === 'edit-temporary-panel') { const node = nodeById(state.selected); if (node) openTemporaryPanelDialog(node); }
     if (event.target.id === 'duplicate-load') duplicateSelectedLoads();
     if (event.target.id === 'unlink-selected') {
