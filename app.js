@@ -285,7 +285,7 @@ function render() {
   });
   outgoingDirect.forEach((links) => links.sort((first, second) => (nodeIndex.get(first.to)?.y || 0) - (nodeIndex.get(second.to)?.y || 0)));
   let markup = '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#1c1c1c"/></marker></defs>';
-  markup += alignmentGuides.map((guide) => guide.axis === 'x' ? `<path class="alignment-guide" d="M${guide.value},15 V735"/>` : `<path class="alignment-guide" d="M35,${guide.value} H1165"/>`).join('');
+  markup += alignmentGuides.map((guide) => guide.axis === 'x' ? `<path class="alignment-guide" d="M${guide.value},5 V775"/>` : `<path class="alignment-guide" d="M35,${guide.value} H1165"/>`).join('');
   const renderedSocapexGroups = new Set();
   state.links.forEach((link) => {
     if (link.socapexGroup) {
@@ -508,7 +508,7 @@ function parseLocaleNumber(value) {
 function arrangeNodes(nodes, anchorX = 600) {
   const items = [...nodes]; if (!items.length) return;
   const loadGrid = items.every((node) => node.type === 'load');
-  const rows = Math.min(loadGrid ? 6 : 4, items.length), columns = Math.ceil(items.length / rows), stepX = loadGrid ? 245 : 220, stepY = loadGrid ? Math.min(108, rows > 1 ? 550 / (rows - 1) : 100) : 124;
+  const rows = Math.min(loadGrid ? 6 : 4, items.length), columns = Math.ceil(items.length / rows), stepX = loadGrid ? 245 : 220, stepY = loadGrid ? Math.min(120, rows > 1 ? 620 / (rows - 1) : 100) : 132;
   const minCenter = 110 + ((columns - 1) * stepX) / 2, maxCenter = 1090 - ((columns - 1) * stepX) / 2, centerX = Math.max(minCenter, Math.min(maxCenter, anchorX)), startX = centerX - ((columns - 1) * stepX) / 2, startY = 390 - ((rows - 1) * stepY) / 2;
   items.forEach((node, index) => { const column = Math.floor(index / rows), row = index % rows; node.x = startX + column * stepX; node.y = startY + row * stepY; });
 }
@@ -911,17 +911,27 @@ function indexMarkup(group, topology, indexPage, total, diagramOffset, indexTota
 async function preparePrint() {
   const issues = projectIssues();
   if (issues.length) return showStatus(`Esportazione bloccata: ${issues[0].message}`);
-  const currentPage = state.currentPage, printPages = $('#print-pages'), candidatePages = [...new Set([...(state.pages || []), ...state.nodes.map((node) => node.page)])].sort((first, second) => first - second), diagramPages = candidatePages.filter((page) => state.nodes.some((node) => node.page === page)), exportedPages = diagramPages.length ? diagramPages : [1], hasIndex = exportedPages.length > 1, topology = indexTopology(exportedPages), indexGroups = hasIndex ? topology.groups : [], pageOffset = 1 + indexGroups.length, totalPages = exportedPages.length + pageOffset, previousTitle = document.title; printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, topology, index + 2, totalPages, pageOffset, indexGroups.length, exportedPages)).join('');
+  const currentPage = state.currentPage, printPages = $('#print-pages'), candidatePages = [...new Set([...(state.pages || []), ...state.nodes.map((node) => node.page)])].sort((first, second) => first - second), diagramPages = candidatePages.filter((page) => state.nodes.some((node) => node.page === page)), exportedPages = diagramPages.length ? diagramPages : [1], hasIndex = exportedPages.length > 1, topology = indexTopology(exportedPages), indexGroups = hasIndex ? topology.groups : [], pageOffset = 1 + indexGroups.length, totalPages = exportedPages.length + pageOffset, previousTitle = document.title;
+  document.body.classList.remove('preparing-print'); printPages.replaceChildren();
+  printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, topology, index + 2, totalPages, pageOffset, indexGroups.length, exportedPages)).join('');
   printPageNumbers = new Map(exportedPages.map((page, index) => [page, index + pageOffset + 1]));
   exportedPages.forEach((page, index) => { const printPage = index + pageOffset + 1; state.currentPage = page; render(); const sheet = $('#drawing-sheet').cloneNode(true); sheet.removeAttribute('id'); sheet.classList.add('print-sheet'); sheet.dataset.sourcePage = page; sheet.dataset.printPage = printPage; sheet.querySelector('#block-page').textContent = `Pagina ${printPage} di ${totalPages}`; printPages.append(sheet); });
   printPageNumbers = null; state.currentPage = currentPage; render();
   const renderedPages = [...printPages.children].map((sheet) => Number(sheet.dataset.printPage)), expectedPages = Array.from({ length: totalPages }, (_, index) => index + 1);
-  if (renderedPages.length !== totalPages || renderedPages.some((page, index) => page !== expectedPages[index])) { showStatus(`Export interrotto: preparate ${renderedPages.length} pagine su ${totalPages}. Riprova dopo aver salvato e riaperto il progetto.`); return; }
+  if (renderedPages.length !== totalPages || renderedPages.some((page, index) => page !== expectedPages[index])) { printPages.replaceChildren(); showStatus(`Export interrotto: preparate ${renderedPages.length} pagine su ${totalPages}. Riprova dopo aver salvato e riaperto il progetto.`); return; }
   document.title = `Unifilare ${state.meta.name || 'Progetto'} ${state.meta.revision || ''}`.trim(); document.body.classList.add('preparing-print');
   if (document.fonts?.ready) await document.fonts.ready;
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  window.addEventListener('afterprint', () => { document.title = previousTitle; document.body.classList.remove('preparing-print'); showStatus(`PDF preparato: ${totalPages} pagine totali, di cui ${exportedPages.length} schemi.`); }, { once: true });
+  let printFinished = false;
+  const finishPrint = () => {
+    if (printFinished) return;
+    printFinished = true; document.title = previousTitle; document.body.classList.remove('preparing-print'); printPages.replaceChildren();
+    window.removeEventListener('focus', finishAfterFocus); showStatus(`PDF preparato: ${totalPages} pagine totali, di cui ${exportedPages.length} schemi.`);
+  };
+  const finishAfterFocus = () => setTimeout(finishPrint, 0);
+  window.addEventListener('afterprint', finishPrint, { once: true }); window.addEventListener('focus', finishAfterFocus, { once: true });
   window.print();
+  setTimeout(finishPrint, 0);
 }
 function svgPoint(event) { const svg = $('#diagram'), point = svg.createSVGPoint(); point.x = event.clientX; point.y = event.clientY; return point.matrixTransform(svg.getScreenCTM().inverse()); }
 function snapToAlignmentGuides(node, references) {
@@ -958,7 +968,7 @@ function bindDiagram() {
     if (additive) { selectNode(nodeId, true); render(); return; }
     if (!state.selectedIds.includes(nodeId)) selectNode(nodeId); else { state.selected = nodeId; state.selectedLink = null; }
     const node = nodeById(nodeId), start = svgPoint(event), positions = selectedNodes().map((item) => ({ node: item, x: item.x, y: item.y })), references = pageNodes().filter((item) => !state.selectedIds.includes(item.id)); let moved = false; checkpoint('move-nodes');
-    const move = (next) => { moved = true; const point = svgPoint(next), dx = point.x - start.x, dy = point.y - start.y; alignmentGuides = []; positions.forEach(({ node: item, x, y }) => { item.x = Math.max(85, Math.min(1115, x + dx)); item.y = Math.max(55, Math.min(700, y + dy)); snapToAlignmentGuides(item, references); }); alignmentGuides = alignmentGuides.filter((guide, index, guides) => guides.findIndex((item) => item.axis === guide.axis && item.value === guide.value) === index); requestRender(); };
+    const move = (next) => { moved = true; const point = svgPoint(next), dx = point.x - start.x, dy = point.y - start.y; alignmentGuides = []; positions.forEach(({ node: item, x, y }) => { item.x = Math.max(85, Math.min(1115, x + dx)); item.y = Math.max(40, Math.min(740, y + dy)); snapToAlignmentGuides(item, references); }); alignmentGuides = alignmentGuides.filter((guide, index, guides) => guides.findIndex((item) => item.axis === guide.axis && item.value === guide.value) === index); requestRender(); };
     const stop = () => { if (moved) markChanged(); else dropNoopHistory(); alignmentGuides = []; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); render(); }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); render();
   });
   $('#diagram').addEventListener('keydown', (event) => {
