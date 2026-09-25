@@ -26,11 +26,7 @@
       <aside class="sidebar no-print">
         <section>
           <h2>Progetto</h2>
-          <label>Nome Evento<input id="event-name" placeholder="Nome Evento" /></label>
-          <label>Luogo<input id="event-location" placeholder="Luogo" /></label>
-          <label>Tipologia<input id="event-type" value="Allestimento Luci" /></label>
-          <label>Versione<input id="event-version" value="1.0" /></label>
-          <button type="button" class="button" id="edit-company">Modifica ditta esecutrice</button>
+          <button type="button" class="button" id="edit-project">Proprietà progetto</button>
         </section>
 
         <section>
@@ -59,15 +55,6 @@
           </div>
         </section>
 
-        <section>
-          <h2>Catalogo linee</h2>
-          <div id="cable-catalog" class="catalog"></div>
-        </section>
-
-        <section class="legend">
-          <h2>Uso rapido</h2>
-          <p>Seleziona un elemento nel disegno per modificarlo. Trascina i blocchi per correggere il layout automatico.</p>
-        </section>
       </aside>
 
       <section class="workspace">
@@ -177,14 +164,12 @@
     </dialog>
     <dialog id="welcome-dialog">
       <form method="dialog">
-        <h2>Nuovo schema unifilare</h2>
-        <p class="help">Il progetto è vuoto. Scegli come iniziare.</p>
+        <h2>Unifilari ATS</h2>
+        <p class="help">Scegli come iniziare.</p>
         <div class="welcome-actions">
-          <button type="button" id="welcome-add-supply">Crea una fornitura</button>
-          <label class="button primary">Importa circuiti Capture<input id="welcome-capture-file" type="file" accept=".csv,text/csv" hidden /></label>
-          <button type="button" id="restore-autosave" hidden>Ripristina lavoro automatico</button>
+          <label class="button primary">Carica progetto salvato<input id="welcome-open-project" type="file" accept="application/json,.json" hidden /></label>
+          <button type="button" class="button" id="welcome-new-project">Nuovo progetto</button>
         </div>
-        <menu><button value="cancel">Inizia vuoto</button></menu>
       </form>
     </dialog>
     <dialog id="capture-import-dialog">
@@ -238,13 +223,20 @@
         <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-align" value="default">Allinea</button></menu>
       </form>
     </dialog>
-    <dialog id="company-dialog">
-      <form method="dialog">
-        <h2>Ditta esecutrice</h2>
-        <label>Denominazione<input id="company-name" /></label>
-        <label>Indirizzo<textarea id="company-address" rows="3" placeholder="Via, numero civico&#10;CAP Città Provincia"></textarea></label>
-        <label>P. IVA<input id="company-vat" /></label>
-        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-company" value="default">Salva</button></menu>
+    <dialog id="project-dialog">
+      <form method="dialog" id="project-dialog-form">
+        <h2 id="project-dialog-title">Proprietà progetto</h2>
+        <label>Nome evento<input id="project-event-name" placeholder="Nome evento" required /></label>
+        <label>Luogo<input id="project-location" placeholder="Luogo" required /></label>
+        <label>Tipologia<input id="project-type" value="Allestimento Luci" required /></label>
+        <label>Versione<input id="project-version" value="1.0" required /></label>
+        <fieldset class="project-company-fields">
+          <legend>Ditta esecutrice</legend>
+          <label>Denominazione<input id="project-company-name" /></label>
+          <label>Indirizzo<textarea id="project-company-address" rows="3" placeholder="Via, numero civico&#10;CAP Città Provincia"></textarea></label>
+          <label>P. IVA<input id="project-company-vat" /></label>
+        </fieldset>
+        <menu><button type="button" id="cancel-project">Annulla</button><button type="submit" class="button primary" id="confirm-project">Salva</button></menu>
       </form>
     </dialog>
     <script src="core.js"></script>

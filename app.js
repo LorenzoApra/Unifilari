@@ -11,7 +11,6 @@ const CABLES = [
   { id: 'socapex', name: 'Socapex', plug: 'Socapex', cable: 'Titanex 19G2,5 mm²' },
 ];
 const CABLE_INDEX = new Map(CABLES.map((cable) => [cable.id, cable]));
-const CATALOG_CABLES = CABLES.filter((cable) => !cable.internal);
 const LINE_CABLES = CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal);
 const LOAD_PLUGS = LINE_CABLES.filter((cable) => !cable.supplyOnly);
 const PANEL_PORTS = CABLES.filter((cable) => cable.id !== 'socapex' && !cable.supplyOnly);
@@ -59,6 +58,7 @@ let dirty = false;
 let savedProjectSnapshot = null;
 let autosaveTimer = null;
 let renderFrame = null;
+let projectDialogMode = 'edit';
 
 function serializableProject() {
   return Core.serializeProject(state);
@@ -135,7 +135,7 @@ function resetHistory() {
   updateDirtyUi();
 }
 function syncMetaInputs() {
-  const ids = { name: 'event-name', location: 'event-location', type: 'event-type', revision: 'event-version' };
+  const ids = { name: 'project-event-name', location: 'project-location', type: 'project-type', revision: 'project-version', company: 'project-company-name', companyAddress: 'project-company-address', companyVat: 'project-company-vat' };
   Object.entries(ids).forEach(([key, id]) => { const input = $(`#${id}`); if (input) input.value = state.meta[key] || ''; });
 }
 function projectIssues() {
@@ -381,7 +381,6 @@ function requestRender() {
   if (renderFrame !== null) return;
   renderFrame = requestAnimationFrame(() => { renderFrame = null; render(); });
 }
-function renderCatalog() { $('#cable-catalog').innerHTML = CATALOG_CABLES.map((cable) => `<div class="catalog-item"><strong>${cable.name}</strong>${cable.cable}</div>`).join(''); }
 function renderInspector() {
   const form = $('#property-form'), node = nodeById(state.selected), link = linkById(state.selectedLink);
   const selected = node || link; $('.empty-state').hidden = !!selected; form.hidden = !selected; $('#delete-selected').hidden = !selected;
@@ -813,26 +812,48 @@ function loadProjectText(text, options = {}) {
     return false;
   }
 }
+function projectMetaFromForm() {
+  return {
+    name: $('#project-event-name').value.trim(),
+    location: $('#project-location').value.trim(),
+    type: $('#project-type').value.trim(),
+    revision: $('#project-version').value.trim(),
+    company: $('#project-company-name').value.trim(),
+    companyAddress: $('#project-company-address').value.trim(),
+    companyVat: $('#project-company-vat').value.trim(),
+  };
+}
+function fillProjectForm(meta) {
+  const ids = { name: 'project-event-name', location: 'project-location', type: 'project-type', revision: 'project-version', company: 'project-company-name', companyAddress: 'project-company-address', companyVat: 'project-company-vat' };
+  Object.entries(ids).forEach(([key, id]) => { $(`#${id}`).value = meta[key] || ''; });
+}
+function openProjectDialog(mode = 'edit') {
+  projectDialogMode = mode;
+  const creating = mode === 'new';
+  const defaults = creating
+    ? { name: '', location: '', type: 'Allestimento Luci', revision: '1.0', company: state.meta.company || 'ATS Srl', companyAddress: state.meta.companyAddress || '', companyVat: state.meta.companyVat || '' }
+    : state.meta;
+  fillProjectForm(defaults);
+  $('#project-dialog-title').textContent = creating ? 'Nuovo progetto' : 'Proprietà progetto';
+  $('#confirm-project').textContent = creating ? 'Crea progetto' : 'Salva modifiche';
+  $('#project-dialog').showModal();
+  $('#project-event-name').focus();
+}
 function createNewProject() {
   if (dirty && !window.confirm('Creare un nuovo progetto? Salva prima il progetto corrente se vuoi conservarlo.')) return;
-  const normalized = Core.normalizeProject({
-    version: Core.SCHEMA_VERSION,
-    meta: { name: '', location: '', type: 'Allestimento Luci', revision: '1.0', company: state.meta.company || 'ATS Srl', companyAddress: state.meta.companyAddress || '', companyVat: state.meta.companyVat || '' },
-    pages: [1],
-    nodes: [],
-    links: [],
-  });
-  state = { ...normalized, library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null };
-  resetHistory(); savedProjectSnapshot = null; syncMetaInputs(); markChanged('Nuovo progetto creato.'); render(); $('#welcome-dialog').showModal();
+  openProjectDialog('new');
 }
-function readAutosave() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(AUTOSAVE_KEY) || 'null');
-    if (!stored?.project) return null;
-    return { ...stored, project: Core.normalizeProject(migrateProject(stored.project)) };
-  } catch {
-    return null;
+function confirmProjectProperties() {
+  const form = $('#project-dialog-form');
+  if (!form.reportValidity()) return;
+  const meta = projectMetaFromForm();
+  if (projectDialogMode === 'new') {
+    const normalized = Core.normalizeProject({ version: Core.SCHEMA_VERSION, meta, pages: [1], nodes: [], links: [] });
+    state = { ...normalized, library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null };
+    resetHistory(); savedProjectSnapshot = null; $('#welcome-dialog').close(); $('#project-dialog').close(); syncMetaInputs(); markChanged('Nuovo progetto creato.'); render();
+    return;
   }
+  checkpoint('edit-project'); state.meta = meta; $('#project-dialog').close(); syncMetaInputs(); markChanged('Proprietà progetto aggiornate.'); render();
 }
 function panelTypeCode(matricola) { return matricola.match(/^[A-Z]+\d+[A-Z]*/)?.[0] || matricola; }
 function panelTypeLabel(code) { return ({ PB250A: 'Quadro 250 A', PB125A: 'Quadro 125 A', PB63A: 'Quadro 63 A', PB32AT: 'Quadro 32 A trifase', PB32AM: 'Quadro 32 A monofase' })[code] || code; }
@@ -1121,12 +1142,9 @@ function togglePanel(element, button, open) {
   button.setAttribute('aria-expanded', String(open));
 }
 function bind() {
-  ['event-name', 'event-location', 'event-type', 'event-version'].forEach((id) => {
-    const key = { 'event-name': 'name', 'event-location': 'location', 'event-type': 'type', 'event-version': 'revision' }[id];
-    $(`#${id}`).addEventListener('input', (event) => { checkpoint(`meta-${key}`); state.meta[key] = event.target.value; markChanged(); render(); });
-  });
-  $('#edit-company').onclick = () => { $('#company-name').value = state.meta.company || ''; $('#company-address').value = state.meta.companyAddress || ''; $('#company-vat').value = state.meta.companyVat || ''; $('#company-dialog').showModal(); };
-  $('#confirm-company').onclick = (event) => { event.preventDefault(); checkpoint('edit-company'); state.meta.company = $('#company-name').value.trim(); state.meta.companyAddress = $('#company-address').value.trim(); state.meta.companyVat = $('#company-vat').value.trim(); $('#company-dialog').close(); markChanged(); render(); };
+  $('#edit-project').onclick = () => openProjectDialog('edit');
+  $('#project-dialog-form').addEventListener('submit', (event) => { event.preventDefault(); confirmProjectProperties(); });
+  $('#cancel-project').onclick = () => $('#project-dialog').close();
 
   $('#add-supply').onclick = () => addNode('supply');
   $('#reuse-supply').onclick = openSupplyReferenceDialog;
@@ -1246,8 +1264,8 @@ function bind() {
     finally { event.target.value = ''; }
   };
   $('#capture-file').addEventListener('change', importCaptureFile);
-  $('#welcome-capture-file').addEventListener('change', importCaptureFile);
-  $('#welcome-add-supply').onclick = () => { $('#welcome-dialog').close(); addNode('supply'); };
+  $('#welcome-new-project').onclick = createNewProject;
+  $('#welcome-dialog').addEventListener('cancel', (event) => event.preventDefault());
   $('#capture-parent').onchange = updateCaptureSocapexAvailability;
   $('#confirm-capture-import').onclick = (event) => { event.preventDefault(); importSelectedCaptureGroups(); };
   $('#capture-select-all').onclick = () => document.querySelectorAll('[data-capture-index]').forEach((input) => { input.checked = true; });
@@ -1260,16 +1278,17 @@ function bind() {
   $('#new-project').onclick = createNewProject;
   $('#save-project').onclick = save;
   $('#print-project').onclick = preparePrint;
-  $('#open-project').addEventListener('change', async (event) => {
+  const openProjectFile = async (event) => {
     const file = event.target.files[0]; if (!file) return;
     if (dirty && !window.confirm('Aprire un altro progetto? Le modifiche correnti restano disponibili nel salvataggio automatico.')) { event.target.value = ''; return; }
     try { loadProjectText(await file.text()); }
     catch (error) { showStatus(`Impossibile leggere il file: ${error.message}`); }
     finally { event.target.value = ''; }
-  });
+  };
+  $('#open-project').addEventListener('change', openProjectFile);
+  $('#welcome-open-project').addEventListener('change', openProjectFile);
   $('#undo-action').onclick = undo;
   $('#redo-action').onclick = redo;
-  $('#restore-autosave').onclick = () => { const autosave = readAutosave(); if (autosave) applyLoadedProject(autosave.project, { dirty: true, message: 'Lavoro automatico ripristinato.' }); };
 
   const sidebar = $('.sidebar'), inspector = $('#inspector');
   $('#toggle-sidebar').onclick = () => togglePanel(sidebar, $('#toggle-sidebar'), !sidebar.classList.contains('open'));
@@ -1284,6 +1303,5 @@ function bind() {
   window.addEventListener('beforeunload', (event) => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
   bindDiagram();
 }
-renderCatalog(); bind(); syncMetaInputs(); savedProjectSnapshot = JSON.stringify(serializableProject()); render();
-const availableAutosave = readAutosave(); $('#restore-autosave').hidden = !availableAutosave; if (availableAutosave?.savedAt) $('#restore-autosave').textContent = `Ripristina lavoro automatico (${new Date(availableAutosave.savedAt).toLocaleString('it-IT')})`;
+bind(); syncMetaInputs(); savedProjectSnapshot = JSON.stringify(serializableProject()); render();
 $('#welcome-dialog').showModal();
