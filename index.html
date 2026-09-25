@@ -71,6 +71,30 @@
             <button id="reuse-link">Richiama collegamento</button>
           </div>
         </section>
+
+        <section class="phase-summary" aria-labelledby="phase-summary-title">
+          <div class="phase-summary-heading">
+            <h2 id="phase-summary-title">Assorbimento fasi</h2>
+            <strong id="phase-total">0 W</strong>
+          </div>
+          <div class="phase-row phase-r">
+            <span class="phase-name">R</span>
+            <div class="phase-values"><strong id="phase-r-power">0 W</strong><span id="phase-r-current">0,0 A</span></div>
+            <div class="phase-meter" aria-hidden="true"><span id="phase-r-meter"></span></div>
+          </div>
+          <div class="phase-row phase-s">
+            <span class="phase-name">S</span>
+            <div class="phase-values"><strong id="phase-s-power">0 W</strong><span id="phase-s-current">0,0 A</span></div>
+            <div class="phase-meter" aria-hidden="true"><span id="phase-s-meter"></span></div>
+          </div>
+          <div class="phase-row phase-t">
+            <span class="phase-name">T</span>
+            <div class="phase-values"><strong id="phase-t-power">0 W</strong><span id="phase-t-current">0,0 A</span></div>
+            <div class="phase-meter" aria-hidden="true"><span id="phase-t-meter"></span></div>
+          </div>
+          <p class="phase-unassigned" id="phase-unassigned" hidden></p>
+          <p class="phase-note">Totale progetto · 230/400 V · cos φ 1<br />P1/P2/P3 → R/S/T in sequenza</p>
+        </section>
       </aside>
 
       <section class="workspace">

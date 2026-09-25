@@ -318,6 +318,31 @@ function socapexLinkKey(link) {
   return link?.socapexGroup ? `${link.socapexGroup}:${link.from}:${isReferenceLink(link) ? 'reference' : 'physical'}` : '';
 }
 
+function formatPhasePower(watts) {
+  if (watts >= 1000) return `${(watts / 1000).toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 2 })} kW`;
+  return `${Math.round(watts).toLocaleString('it-IT')} W`;
+}
+
+function renderPhaseSummary() {
+  const summary = Core.calculatePhaseLoads(state);
+  const phaseNames = ['R', 'S', 'T'];
+  const maximum = Math.max(1, ...phaseNames.map((name) => summary.phases[name].watts));
+  let totalWatts = 0;
+  phaseNames.forEach((name) => {
+    const phase = summary.phases[name], key = name.toLowerCase();
+    totalWatts += phase.watts;
+    $(`#phase-${key}-power`).textContent = formatPhasePower(phase.watts);
+    $(`#phase-${key}-current`).textContent = `${phase.amps.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} A`;
+    $(`#phase-${key}-meter`).style.width = `${phase.watts > 0 ? Math.max(3, (phase.watts / maximum) * 100) : 0}%`;
+  });
+  $('#phase-total').textContent = formatPhasePower(totalWatts);
+  const unassigned = $('#phase-unassigned');
+  unassigned.hidden = summary.unassignedWatts <= 0;
+  unassigned.textContent = summary.unassignedWatts > 0
+    ? `${formatPhasePower(summary.unassignedWatts)} non assegnati a una fase (${summary.unassignedLoads} utenz${summary.unassignedLoads === 1 ? 'a' : 'e'}).`
+    : '';
+}
+
 function render() {
   if (renderFrame !== null) { cancelAnimationFrame(renderFrame); renderFrame = null; }
   const pages = sortedPages(), maxPages = pagesCount();
@@ -374,6 +399,7 @@ function render() {
   $('#next-page').disabled = pageIndex < 0 || pageIndex >= pages.length - 1;
   $('#delete-page').disabled = pages.length <= 1;
   $('#block-event').textContent = state.meta.name || '—'; $('#block-location').textContent = state.meta.location || '—'; $('#block-type').textContent = state.meta.type || '—'; $('#block-version').textContent = state.meta.revision || '1.0'; $('#block-company').textContent = state.meta.company || '—'; $('#block-company-address').textContent = state.meta.companyAddress || '—'; $('#block-company-vat').textContent = state.meta.companyVat ? `P. IVA ${state.meta.companyVat}` : ''; $('#block-page').textContent = `Pagina ${state.currentPage} di ${maxPages}`; $('#project-name').textContent = state.meta.name || 'Nuovo progetto';
+  renderPhaseSummary();
   renderInspector();
   updateDirtyUi();
 }

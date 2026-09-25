@@ -166,4 +166,23 @@ const load = node({ id: 'load-1', type: 'load', plugType: 'cee16mono', watts: 10
   assert.equal(aligned.reason, 'insufficient-space');
 }
 
+{
+  const phasePanel = node({ ...mainPanel, id: 'panel-phases', panelKey: 'panel-phases-key' });
+  const loads = [
+    node({ ...load, id: 'load-r', socket: 'P1', watts: 2300 }),
+    node({ ...load, id: 'load-s', socket: 'P2', watts: 1150 }),
+    node({ ...load, id: 'load-t', socket: 'T9', watts: 460 }),
+    node({ ...load, id: 'load-tri', socket: 'P4', plugType: 'cee32tri', watts: 12000 }),
+    node({ ...load, id: 'load-free', socket: '', watts: 500 }),
+  ];
+  const links = loads.slice(0, 4).map((item, index) => ({ id: `phase-link-${index}`, from: phasePanel.id, to: item.id, cable: item.plugType, length: 20 }));
+  const summary = Core.calculatePhaseLoads(project([phasePanel, ...loads], links));
+  assert.equal(summary.phases.R.watts, 6300);
+  assert.equal(summary.phases.S.watts, 5150);
+  assert.equal(summary.phases.T.watts, 4460);
+  assert.ok(Math.abs(summary.phases.R.amps - (10 + 12000 / (Math.sqrt(3) * 400))) < 0.001);
+  assert.equal(summary.unassignedWatts, 500);
+  assert.equal(summary.unassignedLoads, 1);
+}
+
 console.log('Core domain tests: OK');

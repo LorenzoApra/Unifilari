@@ -79,6 +79,70 @@
     return Boolean(link?.referenceLink);
   }
 
+  function phaseForSocket(socket) {
+    const name = asText(socket).trim().toUpperCase();
+    const explicitPhase = name.match(/^([RST])/);
+    if (explicitPhase) return explicitPhase[1];
+    const genericSocket = name.match(/^P(\d+)$/);
+    if (!genericSocket) return null;
+    return ['R', 'S', 'T'][(Number(genericSocket[1]) - 1) % 3];
+  }
+
+  function isThreePhaseConnector(id) {
+    return ['cee16tri', 'cee32tri', 'cee63tri', 'cee125tri'].includes(id) || isPowerLock(id);
+  }
+
+  function calculatePhaseLoads(project) {
+    const phases = {
+      R: { watts: 0, amps: 0 },
+      S: { watts: 0, amps: 0 },
+      T: { watts: 0, amps: 0 },
+    };
+    const nodeIndex = createNodeIndex(project);
+    const incomingByTarget = new Map();
+    (project.links || []).forEach((link) => {
+      if (!isReferenceLink(link) && !incomingByTarget.has(link.to)) incomingByTarget.set(link.to, link);
+    });
+    let connectedLoads = 0;
+    let unassignedLoads = 0;
+    let unassignedWatts = 0;
+
+    (project.nodes || []).filter((node) => node.type === 'load').forEach((load) => {
+      const watts = Math.max(0, Number(load.watts) || 0);
+      const incoming = incomingByTarget.get(load.id);
+      const source = incoming ? nodeById(project, incoming.from, nodeIndex) : null;
+      if (!incoming || source?.type !== 'panel' || !load.socket) {
+        if (watts > 0) {
+          unassignedLoads += 1;
+          unassignedWatts += watts;
+        }
+        return;
+      }
+
+      connectedLoads += 1;
+      if (isThreePhaseConnector(requiredPlug(load))) {
+        const wattsPerPhase = watts / 3;
+        const ampsPerPhase = watts / (Math.sqrt(3) * 400);
+        Object.values(phases).forEach((phase) => {
+          phase.watts += wattsPerPhase;
+          phase.amps += ampsPerPhase;
+        });
+        return;
+      }
+
+      const phaseName = phaseForSocket(load.socket);
+      if (!phaseName) {
+        unassignedLoads += 1;
+        unassignedWatts += watts;
+        return;
+      }
+      phases[phaseName].watts += watts;
+      phases[phaseName].amps += watts / 230;
+    });
+
+    return { phases, connectedLoads, unassignedLoads, unassignedWatts };
+  }
+
   function samePhysicalSource(first, second) {
     if (!first || !second || first.type !== second.type) return false;
     if (first.type === 'panel') return panelKey(first) === panelKey(second);
@@ -492,6 +556,7 @@
     SCHEMA_VERSION,
     alignNodesWithoutOverlap,
     availablePanelSockets,
+    calculatePhaseLoads,
     compatibleConnector,
     isPowerLock,
     isReferenceLink,
