@@ -382,9 +382,10 @@ function requestRender() {
   renderFrame = requestAnimationFrame(() => { renderFrame = null; render(); });
 }
 function renderInspector() {
-  const form = $('#property-form'), node = nodeById(state.selected), link = linkById(state.selectedLink);
-  const selected = node || link; $('.empty-state').hidden = !!selected; form.hidden = !selected; $('#delete-selected').hidden = !selected;
+  const inspector = $('#inspector'), form = $('#property-form'), node = nodeById(state.selected), link = linkById(state.selectedLink);
+  const selected = node || link; inspector.hidden = !selected; $('.empty-state').hidden = !!selected; form.hidden = !selected; $('#delete-selected').hidden = !selected;
   if (!selected) return;
+  $('#inspector-title').textContent = link ? 'Collegamento' : state.selectedIds.length > 1 ? `${state.selectedIds.length} elementi` : node.title || 'Proprietà';
   if (link) {
     const from = nodeById(link.from), to = nodeById(link.to), reference = isReferenceLink(link);
     const routeEditor = !link.socapexGroup && from && to && from.page === to.page
@@ -1290,9 +1291,16 @@ function bind() {
   $('#undo-action').onclick = undo;
   $('#redo-action').onclick = redo;
 
-  const sidebar = $('.sidebar'), inspector = $('#inspector');
+  const sidebar = $('.sidebar');
+  document.querySelectorAll('.sidebar-group-toggle').forEach((button) => {
+    button.addEventListener('click', () => {
+      const group = button.closest('.sidebar-group'), opening = !group.classList.contains('open');
+      document.querySelectorAll('.sidebar-group').forEach((item) => { item.classList.remove('open'); item.querySelector('.sidebar-group-toggle').setAttribute('aria-expanded', 'false'); });
+      if (opening) { group.classList.add('open'); button.setAttribute('aria-expanded', 'true'); }
+    });
+  });
   $('#toggle-sidebar').onclick = () => togglePanel(sidebar, $('#toggle-sidebar'), !sidebar.classList.contains('open'));
-  $('#toggle-inspector').onclick = () => togglePanel(inspector, $('#toggle-inspector'), !inspector.classList.contains('open'));
+  $('#close-inspector').onclick = () => { state.selected = null; state.selectedIds = []; state.selectedLink = null; render(); };
   document.addEventListener('keydown', (event) => {
     const editable = ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName) || event.target.isContentEditable;
     if (editable) return;
