@@ -336,11 +336,20 @@ function renderPhaseSummary() {
     $(`#phase-${key}-meter`).style.width = `${phase.watts > 0 ? Math.max(3, (phase.watts / maximum) * 100) : 0}%`;
   });
   $('#phase-total').textContent = formatPhasePower(totalWatts);
-  const unassigned = $('#phase-unassigned');
-  unassigned.hidden = summary.unassignedWatts <= 0;
-  unassigned.textContent = summary.unassignedWatts > 0
-    ? `${formatPhasePower(summary.unassignedWatts)} non assegnati a una fase (${summary.unassignedLoads} utenz${summary.unassignedLoads === 1 ? 'a' : 'e'}).`
-    : '';
+  const unconnected = Core.unconnectedLoadIds(state), alert = $('#unconnected-alert');
+  alert.hidden = unconnected.length === 0;
+  $('#unconnected-count').textContent = unconnected.length === 1 ? '1 utenza non collegata' : `${unconnected.length} utenze non collegate`;
+}
+
+function showUnconnectedLoads() {
+  const ids = Core.unconnectedLoadIds(state);
+  if (!ids.length) return;
+  const loads = ids.map(nodeById).filter(Boolean), currentPageIds = loads.filter((load) => load.page === state.currentPage).map((load) => load.id);
+  const targetPage = currentPageIds.length ? state.currentPage : Math.min(...loads.map((load) => load.page));
+  const selectedIds = loads.filter((load) => load.page === targetPage).map((load) => load.id);
+  state.currentPage = targetPage; state.selectedIds = selectedIds; state.selected = selectedIds.at(-1) || null; state.selectedLink = null;
+  render();
+  showStatus(`${ids.length === 1 ? '1 utenza non collegata' : `${ids.length} utenze non collegate`} nel progetto. ${selectedIds.length === 1 ? 'Selezionata' : 'Selezionate'} nella pagina ${targetPage}.`);
 }
 
 function render() {
@@ -936,6 +945,18 @@ function coverMarkup() {
 function titleBlockMarkup(page, total) {
   return `<footer class="title-block"><div><small>Ditta esecutrice</small><strong>${esc(state.meta.company || '—')}</strong><span>${esc(state.meta.companyAddress || '—')}</span>${state.meta.companyVat ? `<span>P. IVA ${esc(state.meta.companyVat)}</span>` : ''}</div><div><small>Descrizione</small><strong>${esc(state.meta.type || '—')}</strong></div><div><small>Evento</small><strong>${esc(state.meta.name || '—')}</strong></div><div><small>Luogo</small><strong>${esc(state.meta.location || '—')}</strong></div><div><small>Versione</small><strong>${esc(state.meta.revision || '1.0')}</strong><small>Pagina ${page} di ${total}</small></div></footer>`;
 }
+function phaseReportMarkup(page, total) {
+  const summary = Core.calculatePhaseLoads(state), names = ['R', 'S', 'T'], values = names.map((name) => summary.phases[name]);
+  const totalWatts = values.reduce((sum, phase) => sum + phase.watts, 0), maximumWatts = Math.max(1, ...values.map((phase) => phase.watts));
+  const averageWatts = totalWatts / 3, wattDifference = Math.max(...values.map((phase) => phase.watts)) - Math.min(...values.map((phase) => phase.watts));
+  const ampDifference = Math.max(...values.map((phase) => phase.amps)) - Math.min(...values.map((phase) => phase.amps));
+  const deviation = averageWatts > 0 ? Math.max(...values.map((phase) => Math.abs(phase.watts - averageWatts))) / averageWatts * 100 : 0;
+  const rows = names.map((name) => {
+    const phase = summary.phases[name], width = phase.watts > 0 ? Math.max(2, phase.watts / maximumWatts * 100) : 0;
+    return `<div class="phase-report-row phase-report-${name.toLowerCase()}"><span class="phase-report-badge">${name}</span><div class="phase-report-track"><span style="width:${width.toFixed(2)}%"></span></div><strong>${formatPhasePower(phase.watts)}</strong><strong>${phase.amps.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} A</strong></div>`;
+  }).join('');
+  return `<article class="phase-report-sheet" data-print-page="${page}"><div class="phase-report-heading">Bilancio carichi per fase</div><main class="phase-report-content"><section class="phase-report-total"><span>Potenza totale assegnata</span><strong>${formatPhasePower(totalWatts)}</strong></section><div class="phase-report-grid"><section><h2>Ripartizione sulle tre fasi</h2><div class="phase-report-columns" aria-hidden="true"><span>Fase</span><span>Carico relativo</span><span>Potenza</span><span>Corrente</span></div>${rows}</section><aside class="phase-report-details"><h2>Sbilanciamento</h2><div><span>Differenza massima</span><strong>${formatPhasePower(wattDifference)} - ${ampDifference.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} A</strong></div><div><span>Scostamento dal valore medio</span><strong>${deviation.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</strong></div><div><span>Media per fase</span><strong>${formatPhasePower(averageWatts)}</strong></div></aside></div></main><p class="phase-report-note">Calcolo indicativo: 230 V monofase, 400 V trifase, cos φ = 1. I carichi trifase sono ripartiti in parti uguali su R, S e T.</p>${titleBlockMarkup(page, total)}</article>`;
+}
 function splitIntoPages(items, size) { return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size)); }
 function groupBy(items, keyFor) {
   const groups = new Map();
@@ -1017,11 +1038,12 @@ function indexMarkup(group, topology, indexPage, total, diagramOffset, indexTota
 async function preparePrint() {
   const issues = projectIssues();
   if (issues.length) return showStatus(`Esportazione bloccata: ${issues[0].message}`);
-  const currentPage = state.currentPage, printPages = $('#print-pages'), candidatePages = [...new Set([...(state.pages || []), ...state.nodes.map((node) => node.page)])].sort((first, second) => first - second), diagramPages = candidatePages.filter((page) => state.nodes.some((node) => node.page === page)), exportedPages = diagramPages.length ? diagramPages : [1], hasIndex = exportedPages.length > 1, topology = indexTopology(exportedPages), indexGroups = hasIndex ? topology.groups : [], pageOffset = 1 + indexGroups.length, totalPages = exportedPages.length + pageOffset, previousTitle = document.title;
+  const currentPage = state.currentPage, printPages = $('#print-pages'), candidatePages = [...new Set([...(state.pages || []), ...state.nodes.map((node) => node.page)])].sort((first, second) => first - second), diagramPages = candidatePages.filter((page) => state.nodes.some((node) => node.page === page)), exportedPages = diagramPages.length ? diagramPages : [1], hasIndex = exportedPages.length > 1, topology = indexTopology(exportedPages), indexGroups = hasIndex ? topology.groups : [], pageOffset = 1 + indexGroups.length, totalPages = exportedPages.length + pageOffset + 1, previousTitle = document.title;
   document.body.classList.remove('preparing-print'); printPages.replaceChildren();
   printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, topology, index + 2, totalPages, pageOffset, indexGroups.length, exportedPages)).join('');
   printPageNumbers = new Map(exportedPages.map((page, index) => [page, index + pageOffset + 1]));
   exportedPages.forEach((page, index) => { const printPage = index + pageOffset + 1; state.currentPage = page; render(); const sheet = $('#drawing-sheet').cloneNode(true); sheet.removeAttribute('id'); sheet.classList.add('print-sheet'); sheet.dataset.sourcePage = page; sheet.dataset.printPage = printPage; sheet.querySelector('#block-page').textContent = `Pagina ${printPage} di ${totalPages}`; printPages.append(sheet); });
+  printPages.insertAdjacentHTML('beforeend', phaseReportMarkup(totalPages, totalPages));
   printPageNumbers = null; state.currentPage = currentPage; render();
   const renderedPages = [...printPages.children].map((sheet) => Number(sheet.dataset.printPage)), expectedPages = Array.from({ length: totalPages }, (_, index) => index + 1);
   if (renderedPages.length !== totalPages || renderedPages.some((page, index) => page !== expectedPages[index])) { printPages.replaceChildren(); showStatus(`Export interrotto: preparate ${renderedPages.length} pagine su ${totalPages}. Riprova dopo aver salvato e riaperto il progetto.`); return; }
@@ -1032,7 +1054,7 @@ async function preparePrint() {
   const finishPrint = () => {
     if (printFinished) return;
     printFinished = true; document.title = previousTitle; document.body.classList.remove('preparing-print'); printPages.replaceChildren();
-    window.removeEventListener('focus', finishAfterFocus); showStatus(`PDF preparato: ${totalPages} pagine totali, di cui ${exportedPages.length} schemi.`);
+    window.removeEventListener('focus', finishAfterFocus); showStatus(`PDF preparato: ${totalPages} pagine totali, di cui ${exportedPages.length} schemi e 1 riepilogo carichi.`);
   };
   const finishAfterFocus = () => setTimeout(finishPrint, 0);
   window.addEventListener('afterprint', finishPrint, { once: true }); window.addEventListener('focus', finishAfterFocus, { once: true });
@@ -1305,6 +1327,7 @@ function bind() {
   $('#new-project').onclick = createNewProject;
   $('#save-project').onclick = save;
   $('#print-project').onclick = preparePrint;
+  $('#show-unconnected-loads').onclick = showUnconnectedLoads;
   const openProjectFile = async (event) => {
     const file = event.target.files[0]; if (!file) return;
     if (dirty && !window.confirm('Aprire un altro progetto? Le modifiche correnti restano disponibili nel salvataggio automatico.')) { event.target.value = ''; return; }

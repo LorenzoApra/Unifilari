@@ -183,6 +183,8 @@ const load = node({ id: 'load-1', type: 'load', plugType: 'cee16mono', watts: 10
   assert.ok(Math.abs(summary.phases.R.amps - (10 + 12000 / (Math.sqrt(3) * 400))) < 0.001);
   assert.equal(summary.unassignedWatts, 500);
   assert.equal(summary.unassignedLoads, 1);
+  assert.deepEqual(Core.unconnectedLoadIds(project([phasePanel, ...loads], links)), ['load-free']);
+  assert.deepEqual(Core.unconnectedLoadIds(project([phasePanel, ...loads], [...links, { id: 'phase-reference', from: phasePanel.id, to: 'load-free', cable: 'cee16mono', referenceLink: true }])), ['load-free']);
 }
 
 console.log('Core domain tests: OK');

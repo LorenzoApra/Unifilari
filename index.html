@@ -92,9 +92,14 @@
             <div class="phase-values"><strong id="phase-t-power">0 W</strong><span id="phase-t-current">0,0 A</span></div>
             <div class="phase-meter" aria-hidden="true"><span id="phase-t-meter"></span></div>
           </div>
-          <p class="phase-unassigned" id="phase-unassigned" hidden></p>
           <p class="phase-note">Totale progetto · 230/400 V · cos φ 1<br />P1/P2/P3 → R/S/T in sequenza</p>
         </section>
+
+        <div class="unconnected-alert" id="unconnected-alert" role="alert" hidden>
+          <span class="unconnected-alert-icon" aria-hidden="true">!</span>
+          <div><strong id="unconnected-count">0 utenze non collegate</strong><span>Non incluse nel calcolo delle fasi</span></div>
+          <button type="button" id="show-unconnected-loads">Mostra</button>
+        </div>
       </aside>
 
       <section class="workspace">

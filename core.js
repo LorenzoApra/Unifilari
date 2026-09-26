@@ -143,6 +143,11 @@
     return { phases, connectedLoads, unassignedLoads, unassignedWatts };
   }
 
+  function unconnectedLoadIds(project) {
+    const connectedTargets = new Set((project.links || []).filter((link) => !isReferenceLink(link)).map((link) => link.to));
+    return (project.nodes || []).filter((node) => node.type === 'load' && !connectedTargets.has(node.id)).map((node) => node.id);
+  }
+
   function samePhysicalSource(first, second) {
     if (!first || !second || first.type !== second.type) return false;
     if (first.type === 'panel') return panelKey(first) === panelKey(second);
@@ -567,6 +572,7 @@
     serializeProject,
     socketWarning,
     supplyKey,
+    unconnectedLoadIds,
     validateConnection,
     validateProject,
   };
