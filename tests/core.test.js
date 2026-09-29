@@ -33,6 +33,20 @@ const secondaryPanel = node({ id: 'panel-2', type: 'panel', panelKey: 'panel-key
 const load = node({ id: 'load-1', type: 'load', plugType: 'cee16mono', watts: 1000 });
 
 {
+  const specialPanel = node({ ...mainPanel, id: 'panel-pb63-special', panelModel: 'PB63A#1' });
+  const specialLoads = Array.from({ length: 6 }, (_, index) => node({ ...load, id: `special-load-${index + 1}`, watts: 1000 }));
+  const current = project([specialPanel, ...specialLoads]);
+  specialLoads.forEach((item, index) => {
+    item.socket = Core.availablePanelSockets(current, specialPanel, item)[0].name;
+    current.links.push({ id: `special-link-${index + 1}`, from: specialPanel.id, to: item.id, cable: 'socapex', length: 20, socapexGroup: 'special-group' });
+  });
+  assert.deepEqual(specialLoads.map((item) => item.socket), ['R1', 'S5', 'T9', 'R2', 'S6', 'T10']);
+  assert.deepEqual(Object.fromEntries(Object.entries(Core.calculatePhaseLoads(current).phases).map(([phase, value]) => [phase, value.watts])), { R: 2000, S: 2000, T: 2000 });
+  assert.equal(Core.socketWarning(current, specialPanel, specialLoads[0], 'R3', current.links[0].id), '');
+  assert.match(Core.socketWarning(current, specialPanel, specialLoads[0], 'S5', current.links[0].id), /occupata/);
+}
+
+{
   const current = project([supply, mainPanel]);
   assert.equal(validateConnection(current, { id: 'link-1', from: supply.id, to: mainPanel.id, cable: 'cee125tri' }).ok, true);
 }

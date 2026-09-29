@@ -318,6 +318,10 @@ function tryAddLink(fromId, toId, cable, length, recordHistory = true, recordCha
 function socapexLinkKey(link) {
   return link?.socapexGroup ? `${link.socapexGroup}:${link.from}:${isReferenceLink(link) ? 'reference' : 'physical'}` : '';
 }
+function socapexGroupLinks(link) {
+  const key = socapexLinkKey(link);
+  return key ? state.links.filter((item) => socapexLinkKey(item) === key) : [];
+}
 
 function formatPhasePower(watts) {
   if (watts >= 1000) return `${(watts / 1000).toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 2 })} kW`;
@@ -429,9 +433,19 @@ function renderInspector() {
   const inspector = $('#inspector'), form = $('#property-form'), node = nodeById(state.selected), link = linkById(state.selectedLink);
   const selected = node || link; inspector.hidden = !selected; $('.empty-state').hidden = !!selected; form.hidden = !selected; $('#delete-selected').hidden = !selected;
   if (!selected) return;
-  $('#inspector-title').textContent = link ? 'Collegamento' : state.selectedIds.length > 1 ? `${state.selectedIds.length} elementi` : node.title || 'Proprietà';
+  $('#inspector-title').textContent = link ? (link.socapexGroup ? 'Collegamento Socapex' : 'Collegamento') : state.selectedIds.length > 1 ? `${state.selectedIds.length} elementi` : node.title || 'Proprietà';
   if (link) {
     const from = nodeById(link.from), to = nodeById(link.to), reference = isReferenceLink(link);
+    if (link.socapexGroup) {
+      const group = socapexGroupLinks(link);
+      const socketRows = group.map((member) => {
+        const target = nodeById(member.to);
+        const sockets = from?.type === 'panel' && target ? availablePanelSockets(from, target, member.id) : [];
+        return `<label>${esc(target?.title || 'Utenza')}<select name="socapexSocket:${member.id}" ${reference || !sockets.length ? 'disabled' : ''}>${sockets.length ? sockets.map((socket) => `<option value="${socket.name}" ${socket.name === target?.socket ? 'selected' : ''}>${socket.name} · ${cableById(socket.type).name}</option>`).join('') : '<option value="">Nessuna presa compatibile libera</option>'}</select></label>`;
+      }).join('');
+      form.innerHTML = `${reference ? '<div class="read-only">Collegamento Socapex richiamato: le prese si modificano sul collegamento originale.</div>' : ''}<label>Da<div class="read-only">${esc(from?.title || '—')}</div></label><label>Linea<div class="read-only">Socapex · ${group.length} utenz${group.length === 1 ? 'a' : 'e'}</div></label><label>Lunghezza (m)<input name="socapexLength" type="number" min="0" step="0.5" value="${link.length}" ${reference ? 'disabled' : ''}/></label><fieldset class="socapex-socket-editor"><legend>Prese del quadro</legend>${socketRows}</fieldset><span class="field-help">Ogni menu mostra soltanto le prese CEE 16 A monofase compatibili e libere.</span>`;
+      return;
+    }
     const routeEditor = !link.socapexGroup && from && to && from.page === to.page
       ? `<div class="route-editor"><strong>Percorso linea</strong><span>Trascina le maniglie blu sui tratti della linea per cambiarne il giro.</span><div><button type="button" class="button" id="add-link-detour">Aggiungi deviazione</button><button type="button" class="button" id="reset-link-route" ${link.routePoints ? '' : 'disabled'}>Percorso automatico</button></div></div>`
       : '';
@@ -1276,6 +1290,19 @@ function bind() {
   $('#property-form').addEventListener('change', (event) => {
     const link = linkById(state.selectedLink), node = nodeById(state.selected), name = event.target.name;
     if (link) {
+      if (link.socapexGroup && name === 'socapexLength') {
+        const length = Math.max(0, Number(event.target.value) || 0);
+        checkpoint(`socapex-length-${link.socapexGroup}`);
+        socapexGroupLinks(link).forEach((member) => { member.length = length; });
+        markChanged('Lunghezza del Socapex aggiornata.'); render(); return;
+      }
+      if (link.socapexGroup && name.startsWith('socapexSocket:')) {
+        const member = linkById(name.slice('socapexSocket:'.length)), target = member && nodeById(member.to), source = member && nodeById(member.from);
+        const proposed = event.target.value.trim().toUpperCase(), warning = socketWarning(source, target, proposed, member?.id);
+        if (!member || !target || warning) { showStatus(warning || 'Presa Socapex non disponibile.'); render(); return; }
+        checkpoint(`socapex-socket-${member.id}`); target.socket = proposed;
+        markChanged('Presa del Socapex aggiornata.'); render(); return;
+      }
       const before = { ...link }, oldTarget = nodeById(link.to), oldSocket = oldTarget?.socket || '', changesEndpoint = ['from', 'to'].includes(name);
       checkpoint(`link-${link.id}-${name}`);
       if (changesEndpoint && oldTarget && !isReferenceLink(link)) oldTarget.socket = '';
