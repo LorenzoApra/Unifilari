@@ -982,29 +982,14 @@ function phaseReportMarkup(page, total) {
   return `<article class="phase-report-sheet" data-print-page="${page}"><div class="phase-report-heading">Bilancio carichi per fase</div><main class="phase-report-content"><section class="phase-report-total"><span>Potenza totale assegnata</span><strong>${formatPhasePower(totalWatts)}</strong></section><div class="phase-report-grid"><section><h2>Ripartizione sulle tre fasi</h2><div class="phase-report-columns" aria-hidden="true"><span>Fase</span><span>Carico relativo</span><span>Potenza</span><span>Corrente</span></div>${rows}</section><aside class="phase-report-details"><h2>Sbilanciamento</h2><div><span>Differenza massima</span><strong>${formatPhasePower(wattDifference)} - ${ampDifference.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} A</strong></div><div><span>Scostamento dal valore medio</span><strong>${deviation.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</strong></div><div><span>Media per fase</span><strong>${formatPhasePower(averageWatts)}</strong></div></aside></div></main><p class="phase-report-note">Calcolo indicativo: 230 V monofase, 400 V trifase, cos φ = 1. I carichi trifase sono ripartiti in parti uguali su R, S e T.</p>${titleBlockMarkup(page, total)}</article>`;
 }
 function splitIntoPages(items, size) { return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size)); }
-function groupBy(items, keyFor) {
-  const groups = new Map();
-  items.forEach((item) => { const key = keyFor(item); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(item); });
-  return groups;
-}
-function splitIndexEntries(entries, size = 5) {
-  const pageGroups = [...groupBy(entries, (entry) => entry.page).values()], result = []; let current = [];
-  pageGroups.forEach((group) => {
-    if (current.length && current.length + group.length > size) { result.push(current); current = []; }
-    if (group.length > size) { if (current.length) { result.push(current); current = []; } result.push(...splitIntoPages(group, size)); }
-    else current.push(...group);
-  });
-  if (current.length) result.push(current);
-  return result;
-}
 function topologyNodeKey(node) {
   if (node?.type === 'supply') return `supply:${supplyKey(node)}`;
   if (node?.type === 'panel') return `panel:${panelKey(node)}`;
   return '';
 }
 function indexTopology(diagramPages) {
-  const canonical = new Map([...uniqueSupplies(), ...uniquePanels()].map((node) => [topologyNodeKey(node), node])), physicalLinks = state.links.filter((link) => !isReferenceLink(link)).map((link) => ({ link, from: nodeById(link.from), to: nodeById(link.to) })).filter(({ from, to }) => ['supply', 'panel'].includes(from?.type) && to?.type === 'panel'), parentByKey = new Map(), linkByPair = new Map(), childKeys = new Set(), physicalIds = new Set();
-  physicalLinks.forEach(({ link, from, to }) => { const fromKey = topologyNodeKey(from), toKey = topologyNodeKey(to); canonical.set(fromKey, from); canonical.set(toKey, to); parentByKey.set(toKey, fromKey); linkByPair.set(`${fromKey}→${toKey}`, link); childKeys.add(fromKey); physicalIds.add(from.id); physicalIds.add(to.id); });
+  const canonical = new Map([...uniqueSupplies(), ...uniquePanels()].map((node) => [topologyNodeKey(node), node])), physicalLinks = state.links.filter((link) => !isReferenceLink(link)).map((link) => ({ from: nodeById(link.from), to: nodeById(link.to) })).filter(({ from, to }) => ['supply', 'panel'].includes(from?.type) && to?.type === 'panel'), parentByKey = new Map(), childKeys = new Set(), physicalIds = new Set();
+  physicalLinks.forEach(({ from, to }) => { const fromKey = topologyNodeKey(from), toKey = topologyNodeKey(to); canonical.set(fromKey, from); canonical.set(toKey, to); parentByKey.set(toKey, fromKey); childKeys.add(fromKey); physicalIds.add(from.id); physicalIds.add(to.id); });
   const pathFor = (key) => {
     const path = [], visited = new Set(); let current = key;
     while (current && !visited.has(current)) { visited.add(current); path.unshift(current); current = parentByKey.get(current); }
@@ -1022,49 +1007,37 @@ function indexTopology(diagramPages) {
     });
   }
   entries = entries.filter((entry, index, list) => entry.path.length && list.findIndex((item) => item.panelKey === entry.panelKey && item.page === entry.page) === index).sort((first, second) => first.page - second.page || (canonical.get(first.panelKey)?.title || '').localeCompare(canonical.get(second.panelKey)?.title || '', 'it', { numeric: true }));
-  const roots = new Map();
-  entries.forEach((entry) => { const root = entry.path[0]; if (!roots.has(root)) roots.set(root, []); roots.get(root).push(entry); });
-  const groups = [...roots.entries()].flatMap(([rootKey, rootEntries]) => splitIndexEntries(rootEntries).map((items) => ({ rootKey, entries: items })));
-  return { canonical, parentByKey, linkByPair, groups };
+  return { canonical, entries };
 }
-function indexNodeLines(node) {
-  if (!node) return [];
-  const values = node.type === 'supply' ? [node.title, node.subtitle || node.details] : [node.title, node.socket ? `Presa ${node.socket}` : node.subtitle, node.socket ? node.subtitle : node.details, node.socket ? node.details : ''];
-  return values.filter(Boolean).flatMap((value) => wrapText(value, node.type === 'supply' ? 22 : 25));
+function indexSupplyEntries(diagramPages, topology) {
+  const pagesBySupply = new Map();
+  const addPage = (rootKey, page) => {
+    if (topology.canonical.get(rootKey)?.type !== 'supply' || !diagramPages.includes(page)) return;
+    if (!pagesBySupply.has(rootKey)) pagesBySupply.set(rootKey, new Set());
+    pagesBySupply.get(rootKey).add(page);
+  };
+  topology.entries.forEach((entry) => addPage(entry.path[0], entry.page));
+  state.nodes.filter((node) => node.type === 'supply').forEach((node) => addPage(topologyNodeKey(node), node.page));
+  return [...pagesBySupply.entries()].map(([rootKey, pages]) => ({
+    rootKey,
+    supply: topology.canonical.get(rootKey),
+    pages: [...pages].sort((first, second) => first - second),
+  })).sort((first, second) => first.pages[0] - second.pages[0] || (first.supply?.title || '').localeCompare(second.supply?.title || '', 'it', { numeric: true }));
 }
-function indexMarkup(group, topology, indexPage, total, diagramOffset, indexTotal, diagramPages) {
-  const entries = group.entries, count = entries.length, startY = count === 1 ? 365 : 125, step = count === 1 ? 0 : Math.min(135, 540 / (count - 1)), rowByEntry = new Map(entries.map((entry, index) => [entry, startY + index * step])), usedKeys = [...new Set(entries.flatMap((entry) => entry.path))], maxDepth = Math.max(1, ...entries.map((entry) => entry.path.length - 1)), commonPrefix = entries[0].path.filter((key, index) => entries.every((entry) => entry.path[index] === key)), supplyAndMain = commonPrefix.length >= 2 && topology.canonical.get(commonPrefix[0])?.type === 'supply' && topology.canonical.get(commonPrefix[1])?.type === 'panel', centers = new Map();
-  usedKeys.forEach((key) => {
-    const matchingEntries = entries.filter((entry) => entry.path.includes(key)), ownRows = entries.filter((entry) => entry.panelKey === key).map((entry) => rowByEntry.get(entry)), rows = ownRows.length ? ownRows : matchingEntries.map((entry) => rowByEntry.get(entry)), depth = Math.max(...matchingEntries.map((entry) => entry.path.indexOf(key))), averageY = rows.reduce((sum, value) => sum + value, 0) / rows.length;
-    if (supplyAndMain && key === commonPrefix[0]) centers.set(key, { x: 120, y: 120 });
-    else if (supplyAndMain && key === commonPrefix[1]) centers.set(key, { x: 120, y: 390 });
-    else if (supplyAndMain) centers.set(key, { x: ownRows.length ? 710 : 530 + Math.max(0, depth - 2) * 90, y: averageY });
-    else centers.set(key, { x: 120 + (depth * 650) / maxDepth, y: averageY });
-  });
-  const dimensions = new Map(usedKeys.map((key) => { const node = topology.canonical.get(key), lines = indexNodeLines(node); return [key, { width: node?.type === 'supply' ? 170 : 190, height: Math.max(62, lines.length * 17 + 18), lines }]; }));
-  const edges = new Map();
-  entries.forEach((entry) => entry.path.slice(1).forEach((key, index) => edges.set(`${entry.path[index]}→${key}`, [entry.path[index], key])));
-  const edgeParts = [...edges.entries()].map(([pair, [fromKey, toKey]]) => {
-    const from = centers.get(fromKey), to = centers.get(toKey), fromSize = dimensions.get(fromKey), toSize = dimensions.get(toKey), vertical = Math.abs(from.x - to.x) < 5, middleX = (from.x + fromSize.width / 2 + to.x - toSize.width / 2) / 2, path = vertical ? `M${from.x},${from.y + fromSize.height / 2} V${to.y - toSize.height / 2}` : `M${from.x + fromSize.width / 2},${from.y} H${middleX} V${to.y} H${to.x - toSize.width / 2}`, link = topology.linkByPair.get(pair), lines = link ? linkLabel(link).flatMap((line) => wrapText(line, 27)) : [], labelX = vertical && from.x > 400 ? from.x - fromSize.width / 2 - 235 : vertical ? from.x + fromSize.width / 2 + 18 : from.x + fromSize.width / 2 + 25, labelY = vertical ? (from.y + fromSize.height / 2 + to.y - toSize.height / 2) / 2 - ((lines.length - 1) * 16) / 2 : to.y - Math.max(36, lines.length * 16 + 8);
-    return { path: `<path class="index-connector" marker-end="url(#index-arrow-${indexPage})" d="${path}"/>`, label: lines.map((line, lineIndex) => `<text class="index-edge-label" x="${labelX}" y="${labelY + lineIndex * 16}">${esc(line)}</text>`).join('') };
-  });
-  const edgeMarkup = edgeParts.map((part) => part.path).join(''), edgeLabelMarkup = edgeParts.map((part) => part.label).join('');
-  const nodeMarkup = usedKeys.map((key) => {
-    const node = topology.canonical.get(key), center = centers.get(key), size = dimensions.get(key), textStart = center.y - ((size.lines.length - 1) * 17) / 2 + 5;
-    return `<rect class="index-node" x="${center.x - size.width / 2}" y="${center.y - size.height / 2}" width="${size.width}" height="${size.height}"/>${size.lines.map((line, lineIndex) => `<text class="index-node-text ${lineIndex === 0 ? 'index-node-title' : ''}" x="${center.x}" y="${textStart + lineIndex * 17}">${esc(line)}</text>`).join('')}`;
+function indexMarkup(entries, indexPage, total, diagramOffset, diagramPages) {
+  const count = entries.length, startY = count === 1 ? 365 : 120, step = count === 1 ? 0 : Math.min(90, 540 / (count - 1)), supplyX = 260, supplyWidth = 260, pageX = 940, pageWidth = 230;
+  const rows = entries.map((entry, index) => {
+    const y = startY + index * step, supplyLines = wrapText(entry.supply?.title || 'Fornitura', 28), supplyHeight = Math.max(58, supplyLines.length * 18 + 22), printedPages = entry.pages.map((page) => diagramOffset + diagramPages.indexOf(page) + 1), pageLabel = `${printedPages.length === 1 ? 'Pagina' : 'Pagine'} ${printedPages.join(', ')}`, pageLines = wrapText(pageLabel, 24), pageHeight = Math.max(58, pageLines.length * 18 + 22), supplyTextY = y - ((supplyLines.length - 1) * 18) / 2 + 5, pageTextY = y - ((pageLines.length - 1) * 18) / 2 + 5;
+    return `<rect class="index-node" x="${supplyX - supplyWidth / 2}" y="${y - supplyHeight / 2}" width="${supplyWidth}" height="${supplyHeight}"/>${supplyLines.map((line, lineIndex) => `<text class="index-node-text index-node-title" x="${supplyX}" y="${supplyTextY + lineIndex * 18}">${esc(line)}</text>`).join('')}<path class="index-connector" marker-end="url(#index-arrow-${indexPage})" d="M${supplyX + supplyWidth / 2},${y} H${pageX - pageWidth / 2}"/><rect class="index-page-box" x="${pageX - pageWidth / 2}" y="${y - pageHeight / 2}" width="${pageWidth}" height="${pageHeight}"/>${pageLines.map((line, lineIndex) => `<text class="index-page-text" x="${pageX}" y="${pageTextY + lineIndex * 18}">${esc(line)}</text>`).join('')}`;
   }).join('');
-  const pageX = 1080, pageWidth = 130, pages = [...groupBy(entries, (entry) => entry.page).entries()], pageMarkup = pages.map(([page, pageEntries]) => {
-    const yValues = pageEntries.map((entry) => rowByEntry.get(entry)), y = yValues.reduce((sum, value) => sum + value, 0) / yValues.length, mergeX = 950, diagramIndex = diagramPages.indexOf(page), printedPage = diagramOffset + diagramIndex + 1, lines = pageEntries.map((entry) => { const center = centers.get(entry.panelKey), size = dimensions.get(entry.panelKey); return `<path class="index-page-branch" d="M${center.x + size.width / 2},${center.y} H${mergeX} V${y}"/>`; }).join('');
-    return `${lines}<path class="index-connector" marker-end="url(#index-arrow-${indexPage})" d="M${mergeX},${y} H${pageX - pageWidth / 2}"/><rect class="index-page-box" x="${pageX - pageWidth / 2}" y="${y - 30}" width="${pageWidth}" height="60"/><text class="index-page-text" x="${pageX}" y="${y + 5}">Pagina ${printedPage}</text>`;
-  }).join('');
-  return `<article class="drawing-sheet index-sheet" data-print-page="${indexPage}"><div class="drawing-title">Schema unifilare di distribuzione elettrica</div><svg class="index-diagram" viewBox="0 0 1200 780" aria-label="Indice schemi"><defs><marker id="index-arrow-${indexPage}" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#1c1c1c"/></marker></defs>${edgeMarkup}${pageMarkup}${nodeMarkup}${edgeLabelMarkup}</svg>${titleBlockMarkup(indexPage, total)}</article>`;
+  return `<article class="drawing-sheet index-sheet" data-print-page="${indexPage}"><div class="drawing-title">Schema unifilare di distribuzione elettrica</div><svg class="index-diagram" viewBox="0 0 1200 780" aria-label="Indice schemi per fornitura"><defs><marker id="index-arrow-${indexPage}" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#1c1c1c"/></marker></defs>${rows}</svg>${titleBlockMarkup(indexPage, total)}</article>`;
 }
 async function preparePrint() {
   const issues = projectIssues();
   if (issues.length) return showStatus(`Esportazione bloccata: ${issues[0].message}`);
-  const currentPage = state.currentPage, printPages = $('#print-pages'), candidatePages = [...new Set([...(state.pages || []), ...state.nodes.map((node) => node.page)])].sort((first, second) => first - second), diagramPages = candidatePages.filter((page) => state.nodes.some((node) => node.page === page)), exportedPages = diagramPages.length ? diagramPages : [1], hasIndex = exportedPages.length > 1, topology = indexTopology(exportedPages), indexGroups = hasIndex ? topology.groups : [], pageOffset = 1 + indexGroups.length, totalPages = exportedPages.length + pageOffset + 1, previousTitle = document.title;
+  const currentPage = state.currentPage, printPages = $('#print-pages'), candidatePages = [...new Set([...(state.pages || []), ...state.nodes.map((node) => node.page)])].sort((first, second) => first - second), diagramPages = candidatePages.filter((page) => state.nodes.some((node) => node.page === page)), exportedPages = diagramPages.length ? diagramPages : [1], hasIndex = exportedPages.length > 1, topology = indexTopology(exportedPages), indexEntries = hasIndex ? indexSupplyEntries(exportedPages, topology) : [], indexGroups = splitIntoPages(indexEntries, 8), pageOffset = 1 + indexGroups.length, totalPages = exportedPages.length + pageOffset + 1, previousTitle = document.title;
   document.body.classList.remove('preparing-print'); printPages.replaceChildren();
-  printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, topology, index + 2, totalPages, pageOffset, indexGroups.length, exportedPages)).join('');
+  printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, index + 2, totalPages, pageOffset, exportedPages)).join('');
   printPageNumbers = new Map(exportedPages.map((page, index) => [page, index + pageOffset + 1]));
   exportedPages.forEach((page, index) => { const printPage = index + pageOffset + 1; state.currentPage = page; render(); const sheet = $('#drawing-sheet').cloneNode(true); sheet.removeAttribute('id'); sheet.classList.add('print-sheet'); sheet.dataset.sourcePage = page; sheet.dataset.printPage = printPage; sheet.querySelector('#block-page').textContent = `Pagina ${printPage} di ${totalPages}`; printPages.append(sheet); });
   printPages.insertAdjacentHTML('beforeend', phaseReportMarkup(totalPages, totalPages));
