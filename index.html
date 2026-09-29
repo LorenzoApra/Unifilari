@@ -77,6 +77,7 @@
             <h2 id="phase-summary-title">Assorbimento fasi</h2>
             <strong id="phase-total">0 W</strong>
           </div>
+          <select id="phase-supply-filter" class="phase-supply-filter" aria-label="Fornitura da analizzare" hidden></select>
           <div class="phase-row phase-r">
             <span class="phase-name">R</span>
             <div class="phase-values"><strong id="phase-r-power">0 W</strong><span id="phase-r-current">0,0 A</span></div>
@@ -92,7 +93,7 @@
             <div class="phase-values"><strong id="phase-t-power">0 W</strong><span id="phase-t-current">0,0 A</span></div>
             <div class="phase-meter" aria-hidden="true"><span id="phase-t-meter"></span></div>
           </div>
-          <p class="phase-note">Totale progetto · 230/400 V · cos φ 1<br />P1/P2/P3 → R/S/T in sequenza</p>
+          <p class="phase-note"><span id="phase-scope-label">Totale progetto</span> · 230/400 V · cos φ 1<br />P1/P2/P3 → R/S/T in sequenza</p>
         </section>
 
         <div class="unconnected-alert" id="unconnected-alert" role="alert" hidden>

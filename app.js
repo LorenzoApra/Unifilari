@@ -59,6 +59,7 @@ let savedProjectSnapshot = null;
 let autosaveTimer = null;
 let renderFrame = null;
 let projectDialogMode = 'edit';
+let phaseSupplyFilter = '';
 
 function serializableProject() {
   return Core.serializeProject(state);
@@ -324,7 +325,14 @@ function formatPhasePower(watts) {
 }
 
 function renderPhaseSummary() {
-  const summary = Core.calculatePhaseLoads(state);
+  const supplies = uniqueSupplies();
+  const supplyFilter = $('#phase-supply-filter');
+  const selectedSupply = supplies.find((supply) => supplyKey(supply) === phaseSupplyFilter);
+  if (phaseSupplyFilter && !selectedSupply) phaseSupplyFilter = '';
+  supplyFilter.hidden = supplies.length <= 1;
+  supplyFilter.innerHTML = `<option value="">Totale progetto</option>${supplies.map((supply) => `<option value="${esc(supplyKey(supply))}" ${supplyKey(supply) === phaseSupplyFilter ? 'selected' : ''}>${esc(supply.title || 'Fornitura')}</option>`).join('')}`;
+  const activeSupply = supplies.find((supply) => supplyKey(supply) === phaseSupplyFilter);
+  const summary = Core.calculatePhaseLoads(state, activeSupply ? { supplyKey: phaseSupplyFilter } : {});
   const phaseNames = ['R', 'S', 'T'];
   const maximum = Math.max(1, ...phaseNames.map((name) => summary.phases[name].watts));
   let totalWatts = 0;
@@ -336,6 +344,7 @@ function renderPhaseSummary() {
     $(`#phase-${key}-meter`).style.width = `${phase.watts > 0 ? Math.max(3, (phase.watts / maximum) * 100) : 0}%`;
   });
   $('#phase-total').textContent = formatPhasePower(totalWatts);
+  $('#phase-scope-label').textContent = activeSupply?.title || 'Totale progetto';
   const unconnected = Core.unconnectedLoadIds(state), alert = $('#unconnected-alert');
   alert.hidden = unconnected.length === 0;
   $('#unconnected-count').textContent = unconnected.length === 1 ? '1 utenza non collegata' : `${unconnected.length} utenze non collegate`;
@@ -830,6 +839,7 @@ function migrateProject(project) {
 function applyLoadedProject(raw, options = {}) {
   const normalized = Core.normalizeProject(migrateProject(raw));
   state = { ...normalized, library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null };
+  phaseSupplyFilter = '';
   syncMetaInputs(); resetHistory(); $('#welcome-dialog').close();
   savedProjectSnapshot = options.dirty ? null : JSON.stringify(serializableProject());
   dirty = Boolean(options.dirty);
@@ -1328,6 +1338,7 @@ function bind() {
   $('#save-project').onclick = save;
   $('#print-project').onclick = preparePrint;
   $('#show-unconnected-loads').onclick = showUnconnectedLoads;
+  $('#phase-supply-filter').onchange = (event) => { phaseSupplyFilter = event.target.value; renderPhaseSummary(); };
   const openProjectFile = async (event) => {
     const file = event.target.files[0]; if (!file) return;
     if (dirty && !window.confirm('Aprire un altro progetto? Le modifiche correnti restano disponibili nel salvataggio automatico.')) { event.target.value = ''; return; }

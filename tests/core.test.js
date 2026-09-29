@@ -187,4 +187,31 @@ const load = node({ id: 'load-1', type: 'load', plugType: 'cee16mono', watts: 10
   assert.deepEqual(Core.unconnectedLoadIds(project([phasePanel, ...loads], [...links, { id: 'phase-reference', from: phasePanel.id, to: 'load-free', cable: 'cee16mono', referenceLink: true }])), ['load-free']);
 }
 
+{
+  const supplyA = node({ ...supply, id: 'supply-phase-a', supplyKey: 'supply-phase-key-a' });
+  const supplyB = node({ ...supply, id: 'supply-phase-b', supplyKey: 'supply-phase-key-b' });
+  const panelA = node({ ...mainPanel, id: 'panel-phase-a', panelKey: 'panel-phase-key-a' });
+  const panelAReference = node({ ...panelA, id: 'panel-phase-a-reference', page: 2 });
+  const panelB = node({ ...mainPanel, id: 'panel-phase-b', panelKey: 'panel-phase-key-b' });
+  const loadA1 = node({ ...load, id: 'load-phase-a-1', socket: 'P1', watts: 2300 });
+  const loadA2 = node({ ...load, id: 'load-phase-a-2', socket: 'P2', watts: 1150, page: 2 });
+  const loadB = node({ ...load, id: 'load-phase-b', socket: 'P1', watts: 4600 });
+  const current = project([supplyA, supplyB, panelA, panelAReference, panelB, loadA1, loadA2, loadB], [
+    { id: 'supply-panel-a', from: supplyA.id, to: panelA.id, cable: 'cee125tri', length: 20 },
+    { id: 'panel-load-a-1', from: panelA.id, to: loadA1.id, cable: 'cee16mono', length: 20 },
+    { id: 'panel-load-a-2', from: panelAReference.id, to: loadA2.id, cable: 'cee16mono', length: 20 },
+    { id: 'supply-panel-b', from: supplyB.id, to: panelB.id, cable: 'cee125tri', length: 20 },
+    { id: 'panel-load-b', from: panelB.id, to: loadB.id, cable: 'cee16mono', length: 20 },
+  ]);
+  const total = Core.calculatePhaseLoads(current);
+  const onlyA = Core.calculatePhaseLoads(current, { supplyKey: supplyA.supplyKey });
+  const onlyB = Core.calculatePhaseLoads(current, { supplyKey: supplyB.supplyKey });
+  assert.equal(total.phases.R.watts, 6900);
+  assert.equal(total.phases.S.watts, 1150);
+  assert.equal(onlyA.phases.R.watts, 2300);
+  assert.equal(onlyA.phases.S.watts, 1150);
+  assert.equal(onlyB.phases.R.watts, 4600);
+  assert.equal(onlyB.phases.S.watts, 0);
+}
+
 console.log('Core domain tests: OK');

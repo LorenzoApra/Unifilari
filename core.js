@@ -92,7 +92,18 @@
     return ['cee16tri', 'cee32tri', 'cee63tri', 'cee125tri'].includes(id) || isPowerLock(id);
   }
 
-  function calculatePhaseLoads(project) {
+  function rootSupplyKeyForNode(project, node, nodeIndex, incomingByPanelKey, visited = new Set()) {
+    if (!node) return null;
+    if (node.type === 'supply') return supplyKey(node);
+    if (node.type !== 'panel') return null;
+    const key = panelKey(node);
+    if (!key || visited.has(key)) return null;
+    visited.add(key);
+    const incoming = incomingByPanelKey.get(key);
+    return incoming ? rootSupplyKeyForNode(project, nodeById(project, incoming.from, nodeIndex), nodeIndex, incomingByPanelKey, visited) : null;
+  }
+
+  function calculatePhaseLoads(project, options = {}) {
     const phases = {
       R: { watts: 0, amps: 0 },
       S: { watts: 0, amps: 0 },
@@ -100,9 +111,14 @@
     };
     const nodeIndex = createNodeIndex(project);
     const incomingByTarget = new Map();
+    const incomingByPanelKey = new Map();
     (project.links || []).forEach((link) => {
-      if (!isReferenceLink(link) && !incomingByTarget.has(link.to)) incomingByTarget.set(link.to, link);
+      if (isReferenceLink(link)) return;
+      if (!incomingByTarget.has(link.to)) incomingByTarget.set(link.to, link);
+      const target = nodeById(project, link.to, nodeIndex);
+      if (target?.type === 'panel' && !incomingByPanelKey.has(panelKey(target))) incomingByPanelKey.set(panelKey(target), link);
     });
+    const selectedSupplyKey = asText(options.supplyKey).trim();
     let connectedLoads = 0;
     let unassignedLoads = 0;
     let unassignedWatts = 0;
@@ -118,6 +134,7 @@
         }
         return;
       }
+      if (selectedSupplyKey && rootSupplyKeyForNode(project, source, nodeIndex, incomingByPanelKey) !== selectedSupplyKey) return;
 
       connectedLoads += 1;
       if (isThreePhaseConnector(requiredPlug(load))) {
