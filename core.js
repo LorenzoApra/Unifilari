@@ -12,6 +12,14 @@
     ...['R1', 'S5', 'T9', 'R2', 'S6', 'T10', 'R3', 'S7', 'T11', 'R4', 'S8', 'T12'].map((name) => ({ name, type: 'cee16mono' })),
     ...['R13', 'S14', 'T15'].map((name) => ({ name, type: 'cee32mono' })),
   ];
+  const CEE_CONNECTORS = {
+    cee16mono: { family: 'mono', amps: 16 },
+    cee32mono: { family: 'mono', amps: 32 },
+    cee16tri: { family: 'tri', amps: 16 },
+    cee32tri: { family: 'tri', amps: 32 },
+    cee63tri: { family: 'tri', amps: 63 },
+    cee125tri: { family: 'tri', amps: 125 },
+  };
 
   function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -47,9 +55,21 @@
   function compatibleConnector(first, second) {
     if (!first || !second) return false;
     if (first === second) return true;
-    if (first === 'powerlock' && isPowerLock(second)) return true;
-    if (second === 'powerlock' && isPowerLock(first)) return true;
+    if (isPowerLock(first) && isPowerLock(second)) return true;
     return false;
+  }
+
+  function supplyCanFeedInput(supplyType, inputType) {
+    if (compatibleConnector(supplyType, inputType)) return true;
+    const supply = CEE_CONNECTORS[supplyType];
+    const input = CEE_CONNECTORS[inputType];
+    return Boolean(supply && input && supply.family === input.family && supply.amps <= input.amps);
+  }
+
+  function cableSectionMatchesConnector(connectorType, sectionType) {
+    if (connectorType === 'socapex') return sectionType === 'socapex';
+    if (isPowerLock(connectorType)) return isPowerLock(sectionType);
+    return Boolean(CEE_CONNECTORS[connectorType] && CEE_CONNECTORS[sectionType] && CEE_CONNECTORS[connectorType].family === CEE_CONNECTORS[sectionType].family);
   }
 
   function requiredPlug(node) {
@@ -278,9 +298,13 @@
         'invalid-cable',
       );
     }
+    const cableSection = candidate.cableSection || cableType;
+    if (!cableSectionMatchesConnector(cableType, cableSection)) {
+      return connectionFailure('La sezione scelta non è compatibile con il numero di conduttori della linea.', 'invalid-cable-section');
+    }
 
     if (from.type === 'supply') {
-      if (!compatibleConnector(from.supplyType, required) || !compatibleConnector(from.supplyType, cableType)) {
+      if (!supplyCanFeedInput(from.supplyType, required)) {
         return connectionFailure(
           `La fornitura ${cableName(from.supplyType)} non è compatibile con l’ingresso ${cableName(required)} del quadro.`,
           'incompatible-supply',
@@ -409,6 +433,7 @@
       from: assertSafeId(raw.from, 'L’origine di un collegamento'),
       to: assertSafeId(raw.to, 'La destinazione di un collegamento'),
       cable: assertSafeId(raw.cable || 'cee16mono', 'Il tipo di cavo'),
+      cableSection: assertSafeId(raw.cableSection || raw.cable || 'cee16mono', 'La sezione del cavo'),
       length: asFiniteNumber(raw.length, 20, 0, 10000),
     };
     if (raw.referenceLink) link.referenceLink = true;
@@ -588,6 +613,7 @@
     requiredPlug,
     serializeProject,
     socketWarning,
+    supplyCanFeedInput,
     supplyKey,
     unconnectedLoadIds,
     validateConnection,

@@ -14,6 +14,12 @@ const CABLE_INDEX = new Map(CABLES.map((cable) => [cable.id, cable]));
 const LINE_CABLES = CABLES.filter((cable) => cable.id !== 'socapex' && !cable.internal);
 const LOAD_PLUGS = LINE_CABLES.filter((cable) => !cable.supplyOnly);
 const PANEL_PORTS = CABLES.filter((cable) => cable.id !== 'socapex' && !cable.supplyOnly);
+const CABLE_SECTION_GROUPS = {
+  mono: ['cee16mono', 'cee32mono'],
+  tri: ['cee16tri', 'cee32tri', 'cee63tri', 'cee125tri'],
+  powerlock: ['powerlock250', 'powerlock400'],
+  socapex: ['socapex'],
+};
 // Libreria standard derivata da Quadri.xlsx: viene gestita nel codice dell'app, non nell'interfaccia utente.
 const portList = (...items) => items.map(([type, quantity]) => ({ type, quantity }));
 const panelModels = (prefix, numbers, inputType, ports, alternatives = []) => numbers.map((number) => ({ matricola: `${prefix}#${number}`, inputType, ports, alternatives }));
@@ -181,9 +187,10 @@ function nodeDisplayHeight(node) {
 function cableShortLabel(cable) { return cable.name.replace(/ monofase| trifase/gi, '').replace(/ (\d+) A$/, ' $1A'); }
 function linkLabel(link) {
   const cable = cableById(link.cable);
-  if (isPowerLock(cable.id)) return ['Cavo singolo polo PowerLock', `Lunghezza linea ${link.length || 0} metri`];
-  if (cable.id === 'socapex') return [`Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri`];
-  return [cableShortLabel(cable), `Cavo ${cable.cable}`, `Lunghezza linea ${link.length || 0} metri`];
+  const section = cableById(link.cableSection || link.cable);
+  if (isPowerLock(cable.id)) return ['Cavo singolo polo PowerLock', section.cable, `Lunghezza linea ${link.length || 0} metri`];
+  if (cable.id === 'socapex') return [`Cavo ${section.cable}`, `Lunghezza linea ${link.length || 0} metri`];
+  return [cableShortLabel(cable), `Cavo ${section.cable}`, `Lunghezza linea ${link.length || 0} metri`];
 }
 function linkLabelPosition(link, from, to) {
   const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = Math.round((startX + endX) / 2), lines = linkLabel(link).flatMap((line) => wrapText(line, 29));
@@ -250,6 +257,17 @@ function addLinkDetour(link) {
   return true;
 }
 function cableOptionMarkup(cables, selected) { return cables.map((cable) => `<option value="${cable.id}" ${cable.id === selected ? 'selected' : ''}>${cable.name}</option>`).join(''); }
+function cableSectionGroup(connectorId) {
+  if (connectorId === 'socapex') return CABLE_SECTION_GROUPS.socapex;
+  if (isPowerLock(connectorId)) return CABLE_SECTION_GROUPS.powerlock;
+  if (connectorId.endsWith('mono')) return CABLE_SECTION_GROUPS.mono;
+  return CABLE_SECTION_GROUPS.tri;
+}
+function cableSectionOptions(connectorId, selected) {
+  const ids = cableSectionGroup(connectorId);
+  const selectedId = ids.includes(selected) ? selected : connectorId;
+  return ids.map((id) => { const cable = cableById(id); return `<option value="${cable.id}" ${cable.id === selectedId ? 'selected' : ''}>${esc(cable.cable)}</option>`; }).join('');
+}
 function nodeOptions(selected) { return pageNodes().map((node) => `<option value="${node.id}" ${node.id === selected ? 'selected' : ''}>${esc(node.title)}${node.socket ? ` (${node.socket})` : ''}</option>`).join(''); }
 function cableOptions(selected) { return cableOptionMarkup(LINE_CABLES, selected); }
 function plugOptions(selected) { return cableOptionMarkup(LOAD_PLUGS, selected); }
@@ -303,13 +321,13 @@ function updatePanelNumbering(from, target) {
     panelGroup(panel).forEach((instance) => { if (/^Quadro #\d+$/.test(instance.title || '')) instance.title = `Quadro #${index + 1}`; });
   });
 }
-function tryAddLink(fromId, toId, cable, length, recordHistory = true, recordChange = true) {
+function tryAddLink(fromId, toId, cable, length, recordHistory = true, recordChange = true, cableSection = null) {
   const from = nodeById(fromId), to = nodeById(toId); if (!from || !to || fromId === toId) return false;
   const lineCable = cable || requiredPlug(to) || 'cee16mono';
   const warning = compatibilityWarning(from, to, null, lineCable); if (warning) { showStatus(warning); return false; }
   if (recordHistory) checkpoint('add-link');
   if (!assignFirstFreeSocket(from, to)) { if (recordHistory) dropNoopHistory(); return false; }
-  state.links.push({ id: uid(), from: fromId, to: toId, cable: lineCable, length: Number.isFinite(Number(length)) ? Math.max(0, Number(length)) : 20 });
+  state.links.push({ id: uid(), from: fromId, to: toId, cable: lineCable, cableSection: cableSection || requiredPlug(to) || lineCable, length: Number.isFinite(Number(length)) ? Math.max(0, Number(length)) : 20 });
   updatePanelNumbering(from, to);
   if (recordChange) { markChanged(); showStatus(''); }
   return true;
@@ -449,7 +467,7 @@ function renderInspector() {
     const routeEditor = !link.socapexGroup && from && to && from.page === to.page
       ? `<div class="route-editor"><strong>Percorso linea</strong><span>Trascina le maniglie blu sui tratti della linea per cambiarne il giro.</span><div><button type="button" class="button" id="add-link-detour">Aggiungi deviazione</button><button type="button" class="button" id="reset-link-route" ${link.routePoints ? '' : 'disabled'}>Percorso automatico</button></div></div>`
       : '';
-    form.innerHTML = `${reference ? `<div class="read-only">Collegamento richiamato: non impegna ulteriormente prese o ingressi.</div><label>Da<div class="read-only">${esc(from?.title || '—')}</div></label><label>A<div class="read-only">${esc(to?.title || '—')}</div></label>` : `<label>Da<select name="from">${nodeOptions(link.from)}</select></label><label>A<select name="to">${nodeOptions(link.to)}</select></label>`}<label>Linea<select name="cable">${cableOptions(link.cable)}</select></label><label>Lunghezza (m)<input name="length" type="number" min="0" step="0.5" value="${link.length}" /></label>${routeEditor}<span class="field-help">Puoi spostare anche la descrizione trascinandola. Elimina il collegamento con il pulsante in alto.</span>`;
+    form.innerHTML = `${reference ? `<div class="read-only">Collegamento richiamato: non impegna ulteriormente prese o ingressi.</div><label>Da<div class="read-only">${esc(from?.title || '—')}</div></label><label>A<div class="read-only">${esc(to?.title || '—')}</div></label>` : `<label>Da<select name="from">${nodeOptions(link.from)}</select></label><label>A<select name="to">${nodeOptions(link.to)}</select></label>`}<label>Spina / linea<select name="cable">${cableOptions(link.cable)}</select></label><label>Sezione cavo<select name="cableSection">${cableSectionOptions(link.cable, link.cableSection || link.cable)}</select></label><label>Lunghezza (m)<input name="length" type="number" min="0" step="0.5" value="${link.length}" /></label>${routeEditor}<span class="field-help">La sezione del cavo può essere modificata senza cambiare la spina. Puoi spostare la descrizione trascinandola.</span>`;
     return;
   }
   const hasIncoming = state.links.some((item) => item.to === node.id);
@@ -937,14 +955,16 @@ function refreshLinkDialog() {
   });
   const previousTarget = $('#link-to').value;
   $('#link-to').innerHTML = targets.map((node) => `<option value="${node.id}" ${node.id === previousTarget ? 'selected' : ''}>${esc(node.title)}</option>`).join('');
-  const target = nodeById($('#link-to').value), required = requiredPlug(target);
+  const target = nodeById($('#link-to').value), required = requiredPlug(target), previousCable = $('#link-cable').value;
   const allowed = target ? CABLES.filter((cable) => {
     if (cable.internal || cable.id === 'socapex') return false;
     if (!compatibleConnector(cable.id, required)) return false;
-    if (source.type === 'supply') return compatibleConnector(source.supplyType, cable.id);
+    if (source.type === 'supply') return true;
     return (source.ports || []).some((port) => compatibleConnector(port.type, required) && compatibleConnector(port.type, cable.id));
   }) : [];
-  $('#link-cable').innerHTML = allowed.map((cable) => `<option value="${cable.id}">${cable.name}</option>`).join('');
+  $('#link-cable').innerHTML = allowed.map((cable) => `<option value="${cable.id}" ${cable.id === previousCable ? 'selected' : ''}>${cable.name}</option>`).join('');
+  const selectedCable = $('#link-cable').value || required;
+  $('#link-section').innerHTML = selectedCable ? cableSectionOptions(selectedCable, required) : '';
   $('#confirm-link').disabled = !source || !target || !allowed.length;
 }
 function showLinkDialog() {
@@ -1280,6 +1300,11 @@ function bind() {
       checkpoint(`link-${link.id}-${name}`);
       if (changesEndpoint && oldTarget && !isReferenceLink(link)) oldTarget.socket = '';
       link[name] = name === 'length' ? Math.max(0, Number(event.target.value) || 0) : event.target.value;
+      if (name === 'to') {
+        const destinationConnector = requiredPlug(nodeById(link.to));
+        if (destinationConnector) { link.cable = destinationConnector; link.cableSection = destinationConnector; }
+      }
+      if (name === 'cable' && !cableSectionGroup(link.cable).includes(link.cableSection)) link.cableSection = link.cable;
       const newTarget = nodeById(link.to), newTargetSocket = newTarget?.socket || '';
       const warning = isReferenceLink(link) ? '' : compatibilityWarning(nodeById(link.from), newTarget, link.id, link.cable);
       if (warning || (!isReferenceLink(link) && changesEndpoint && !assignFirstFreeSocket(nodeById(link.from), newTarget))) {
@@ -1333,7 +1358,8 @@ function bind() {
 
   $('#link-from').onchange = refreshLinkDialog;
   $('#link-to').onchange = refreshLinkDialog;
-  $('#confirm-link').onclick = (event) => { event.preventDefault(); const from = $('#link-from').value, to = $('#link-to').value; if (tryAddLink(from, to, $('#link-cable').value, Number($('#link-length').value) || 0)) $('#link-dialog').close(); render(); };
+  $('#link-cable').onchange = () => { $('#link-section').innerHTML = cableSectionOptions($('#link-cable').value, $('#link-cable').value); };
+  $('#confirm-link').onclick = (event) => { event.preventDefault(); const from = $('#link-from').value, to = $('#link-to').value; if (tryAddLink(from, to, $('#link-cable').value, Number($('#link-length').value) || 0, true, true, $('#link-section').value)) $('#link-dialog').close(); render(); };
   $('#new-project').onclick = createNewProject;
   $('#save-project').onclick = save;
   $('#print-project').onclick = preparePrint;

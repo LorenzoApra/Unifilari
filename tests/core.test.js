@@ -32,6 +32,9 @@ const mainPanel = node({ id: 'panel-1', type: 'panel', panelKey: 'panel-key-1', 
 const secondaryPanel = node({ id: 'panel-2', type: 'panel', panelKey: 'panel-key-2', panelModel: 'Temporaneo', inputType: 'cee63tri', ports: [{ type: 'cee63tri', quantity: 1 }] });
 const load = node({ id: 'load-1', type: 'load', plugType: 'cee16mono', watts: 1000 });
 
+assert.equal(Core.compatibleConnector('powerlock250', 'powerlock400'), true);
+assert.equal(Core.compatibleConnector('powerlock400', 'powerlock250'), true);
+
 {
   const specialPanel = node({ ...mainPanel, id: 'panel-pb63-special', panelModel: 'PB63A#1' });
   const specialLoads = Array.from({ length: 6 }, (_, index) => node({ ...load, id: `special-load-${index + 1}`, watts: 1000 }));
@@ -49,6 +52,21 @@ const load = node({ id: 'load-1', type: 'load', plugType: 'cee16mono', watts: 10
 {
   const current = project([supply, mainPanel]);
   assert.equal(validateConnection(current, { id: 'link-1', from: supply.id, to: mainPanel.id, cable: 'cee125tri' }).ok, true);
+}
+
+{
+  const supply32 = node({ ...supply, id: 'supply-32-to-63', supplyType: 'cee32tri' });
+  const panel63 = node({ ...mainPanel, id: 'panel-63-from-32', inputType: 'cee63tri' });
+  const current = project([supply32, panel63]);
+  assert.equal(validateConnection(current, { id: 'link-adapter-up', from: supply32.id, to: panel63.id, cable: 'cee63tri' }).ok, true);
+  assert.equal(validateConnection(current, { id: 'link-wrong-cable', from: supply32.id, to: panel63.id, cable: 'cee32tri' }).code, 'invalid-cable');
+}
+
+{
+  const supply63 = node({ ...supply, id: 'supply-63-to-32', supplyType: 'cee63tri' });
+  const panel32 = node({ ...mainPanel, id: 'panel-32-from-63', inputType: 'cee32tri' });
+  const current = project([supply63, panel32]);
+  assert.equal(validateConnection(current, { id: 'link-adapter-down', from: supply63.id, to: panel32.id, cable: 'cee32tri' }).code, 'incompatible-supply');
 }
 
 {
@@ -129,8 +147,18 @@ const load = node({ id: 'load-1', type: 'load', plugType: 'cee16mono', watts: 10
 {
   const routedLink = { id: 'link-routed', from: mainPanel.id, to: load.id, cable: 'cee16mono', length: 20, routePoints: [{ x: 420, y: 150 }, { x: 420, y: 310 }] };
   const normalized = Core.normalizeProject(project([mainPanel, load], [routedLink]));
+  assert.equal(normalized.links[0].cableSection, 'cee16mono');
   assert.deepEqual(normalized.links[0].routePoints, routedLink.routePoints);
   assert.deepEqual(Core.serializeProject(normalized).links[0].routePoints, routedLink.routePoints);
+}
+
+{
+  const customSectionLink = { id: 'link-custom-section', from: mainPanel.id, to: load.id, cable: 'cee16mono', cableSection: 'cee32mono', length: 20 };
+  const normalized = Core.normalizeProject(project([mainPanel, load], [customSectionLink]));
+  assert.equal(normalized.links[0].cable, 'cee16mono');
+  assert.equal(normalized.links[0].cableSection, 'cee32mono');
+  assert.equal(Core.validateConnection(normalized, normalized.links[0], { ignoredLinkId: normalized.links[0].id }).ok, true);
+  assert.equal(Core.validateConnection(normalized, { ...normalized.links[0], cableSection: 'cee32tri' }, { ignoredLinkId: normalized.links[0].id }).code, 'invalid-cable-section');
 }
 
 {
