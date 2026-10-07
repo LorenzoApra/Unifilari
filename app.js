@@ -275,6 +275,7 @@ function supplyOptions(selected) { return cableOptionMarkup(LINE_CABLES, selecte
 function panelPortOptions(selected) { return cableOptionMarkup(PANEL_PORTS, selected); }
 function isPowerLock(id) { return Core.isPowerLock(id); }
 function compatibleConnector(first, second) { return Core.compatibleConnector(first, second); }
+function connectorCanFeedInput(first, second) { return Core.connectorCanFeedInput(first, second); }
 function requiredPlug(node) { return Core.requiredPlug(node); }
 function panelSockets(panel) { return Core.panelSockets(panel); }
 function availablePanelSockets(panel, target, ignoredLink = null) { return Core.availablePanelSockets(state, panel, target, ignoredLink); }
@@ -859,12 +860,23 @@ function migratePowerLockSupplyTypes(project) {
   (project.nodes || []).filter((node) => node.type === 'supply' && node.supplyType === 'powerlock').forEach((node) => { node.supplyType = 'powerlock250'; node.subtitle = cableById(node.supplyType).plug; });
   (project.links || []).filter((link) => link.cable === 'powerlock').forEach((link) => { const source = (project.nodes || []).find((node) => node.id === link.from); link.cable = source?.supplyType === 'powerlock400' ? 'powerlock400' : 'powerlock250'; });
 }
+function migratePanelInputCables(project) {
+  const nodes = new Map((project.nodes || []).map((node) => [node.id, node]));
+  (project.links || []).forEach((link) => {
+    const target = nodes.get(link.to), inputType = target?.type === 'panel' ? target.inputType : null;
+    if (!inputType || !inputType.startsWith('cee')) { link.cableSection ||= link.cable; return; }
+    const previousCable = link.cable;
+    link.cable = inputType;
+    if (!link.cableSection || link.cableSection === previousCable) link.cableSection = inputType;
+  });
+}
 function migrateProject(project) {
   if (!project || typeof project !== 'object' || Array.isArray(project)) throw new Error('Il file non contiene un progetto valido.');
   migrateLegacySocapex(project);
   migrateSupplyReferences(project);
   migratePanelReferences(project);
   migratePowerLockSupplyTypes(project);
+  migratePanelInputCables(project);
   project.version = Core.SCHEMA_VERSION;
   return project;
 }
@@ -960,7 +972,7 @@ function refreshLinkDialog() {
     if (cable.internal || cable.id === 'socapex') return false;
     if (!compatibleConnector(cable.id, required)) return false;
     if (source.type === 'supply') return true;
-    return (source.ports || []).some((port) => compatibleConnector(port.type, required) && compatibleConnector(port.type, cable.id));
+    return (source.ports || []).some((port) => (target.type === 'panel' ? connectorCanFeedInput(port.type, required) : compatibleConnector(port.type, required)) && compatibleConnector(cable.id, required));
   }) : [];
   $('#link-cable').innerHTML = allowed.map((cable) => `<option value="${cable.id}" ${cable.id === previousCable ? 'selected' : ''}>${cable.name}</option>`).join('');
   const selectedCable = $('#link-cable').value || required;

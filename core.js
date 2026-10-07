@@ -59,11 +59,15 @@
     return false;
   }
 
-  function supplyCanFeedInput(supplyType, inputType) {
-    if (compatibleConnector(supplyType, inputType)) return true;
-    const supply = CEE_CONNECTORS[supplyType];
+  function connectorCanFeedInput(sourceType, inputType) {
+    if (compatibleConnector(sourceType, inputType)) return true;
+    const supply = CEE_CONNECTORS[sourceType];
     const input = CEE_CONNECTORS[inputType];
     return Boolean(supply && input && supply.family === input.family && supply.amps <= input.amps);
+  }
+
+  function supplyCanFeedInput(supplyType, inputType) {
+    return connectorCanFeedInput(supplyType, inputType);
   }
 
   function cableSectionMatchesConnector(connectorType, sectionType) {
@@ -221,17 +225,20 @@
         .map((link) => nodeById(project, link.to, nodeIndex)?.socket)
         .filter(Boolean),
     );
-    return panelSockets(panel).filter(
-      (socket) =>
-        compatibleConnector(socket.type, required) &&
-        !used.has(socket.name),
-    );
+    const compatible = panelSockets(panel).filter((socket) =>
+      (target?.type === 'panel' ? connectorCanFeedInput(socket.type, required) : compatibleConnector(socket.type, required)) &&
+      !used.has(socket.name));
+    return compatible.sort((first, second) => {
+      const exact = Number(second.type === required) - Number(first.type === required);
+      if (exact) return exact;
+      return (CEE_CONNECTORS[second.type]?.amps || 0) - (CEE_CONNECTORS[first.type]?.amps || 0);
+    });
   }
 
   function socketWarning(project, panel, target, socket, ignoredLinkId = null, cableName = (id) => id, nodeIndex = null) {
     if (panel?.type !== 'panel' || !socket) return '';
     const required = requiredPlug(target);
-    const matching = panelSockets(panel).filter((item) => compatibleConnector(item.type, required));
+    const matching = panelSockets(panel).filter((item) => target?.type === 'panel' ? connectorCanFeedInput(item.type, required) : compatibleConnector(item.type, required));
     if (!matching.some((item) => item.name === socket)) {
       return `La presa ${socket} non è compatibile con ${cableName(required)}.`;
     }
@@ -317,19 +324,14 @@
     }
 
     if (from.type === 'panel') {
-      const capacity = (from.ports || [])
-        .filter((port) => compatibleConnector(port.type, required))
-        .reduce((sum, port) => sum + asPositiveInteger(port.quantity, 1, 500), 0);
-      const used = (project.links || []).filter((link) => {
-        if (isReferenceLink(link) || link.id === ignoredLinkId) return false;
-        const source = nodeById(project, link.from, nodeIndex);
-        const target = nodeById(project, link.to, nodeIndex);
-        return samePhysicalSource(source, from) && compatibleConnector(requiredPlug(target), required);
-      }).length;
+      const eligibleSockets = panelSockets(from).filter((socket) => to.type === 'panel' ? connectorCanFeedInput(socket.type, required) : compatibleConnector(socket.type, required));
+      const capacity = eligibleSockets.length;
+      const available = availablePanelSockets(project, from, to, ignoredLinkId, nodeIndex).length;
+      const used = capacity - available;
       if (!capacity) {
         return connectionFailure(`${from.title} non ha uscite ${cableName(required)}.`, 'missing-panel-output');
       }
-      if (used >= capacity) {
+      if (!available) {
         return connectionFailure(
           `Le prese ${cableName(required)} del quadro ${from.title} sono terminate (${used}/${capacity}).`,
           'panel-capacity',
@@ -605,6 +607,7 @@
     availablePanelSockets,
     calculatePhaseLoads,
     compatibleConnector,
+    connectorCanFeedInput,
     isPowerLock,
     isReferenceLink,
     normalizeProject,

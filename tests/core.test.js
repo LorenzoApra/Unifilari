@@ -70,6 +70,30 @@ assert.equal(Core.compatibleConnector('powerlock400', 'powerlock250'), true);
 }
 
 {
+  const panel16Output = node({ ...mainPanel, id: 'panel-16-output', panelKey: 'panel-16-output-key', ports: [{ type: 'cee16mono', quantity: 1 }] });
+  const panel32Input = node({ ...secondaryPanel, id: 'panel-32-input', panelKey: 'panel-32-input-key', inputType: 'cee32mono' });
+  const current = project([panel16Output, panel32Input]);
+  const candidate = { id: 'link-panel-adapter-up', from: panel16Output.id, to: panel32Input.id, cable: 'cee32mono', cableSection: 'cee32mono' };
+  assert.equal(validateConnection(current, candidate).ok, true);
+  assert.equal(Core.availablePanelSockets(current, panel16Output, panel32Input)[0].name, 'P1');
+}
+
+{
+  const mixedOutput = node({ ...mainPanel, id: 'panel-mixed-output', panelKey: 'panel-mixed-output-key', ports: [{ type: 'cee16mono', quantity: 1 }, { type: 'cee32mono', quantity: 1 }] });
+  const panel32Input = node({ ...secondaryPanel, id: 'panel-32-exact', panelKey: 'panel-32-exact-key', inputType: 'cee32mono' });
+  const current = project([mixedOutput, panel32Input]);
+  assert.equal(Core.availablePanelSockets(current, mixedOutput, panel32Input)[0].name, 'P2');
+}
+
+{
+  const panel32Output = node({ ...mainPanel, id: 'panel-32-output', panelKey: 'panel-32-output-key', ports: [{ type: 'cee32mono', quantity: 1 }] });
+  const panel16Input = node({ ...secondaryPanel, id: 'panel-16-input', panelKey: 'panel-16-input-key', inputType: 'cee16mono' });
+  const load32 = node({ ...load, id: 'load-32-no-adapter', plugType: 'cee32mono' });
+  assert.equal(validateConnection(project([panel32Output, panel16Input]), { id: 'link-panel-adapter-down', from: panel32Output.id, to: panel16Input.id, cable: 'cee16mono' }).code, 'missing-panel-output');
+  assert.equal(validateConnection(project([node({ ...panel32Output, id: 'panel-only-16', panelKey: 'panel-only-16-key', ports: [{ type: 'cee16mono', quantity: 1 }] }), load32]), { id: 'link-load-no-adapter', from: 'panel-only-16', to: load32.id, cable: 'cee32mono' }).code, 'missing-panel-output');
+}
+
+{
   const current = project([supply, mainPanel]);
   const result = validateConnection(current, { id: 'link-1', from: supply.id, to: mainPanel.id, cable: 'cee16mono' });
   assert.equal(result.ok, false);
