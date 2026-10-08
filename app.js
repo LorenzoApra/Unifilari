@@ -157,6 +157,10 @@ function uniqueSupplies() { return [...new Map(state.nodes.filter((node) => node
 function panelKey(node) { return node?.panelKey || node?.id; }
 function panelGroup(node) { return state.nodes.filter((item) => item.type === 'panel' && panelKey(item) === panelKey(node)); }
 function uniquePanels() { return [...new Map(state.nodes.filter((node) => node.type === 'panel').map((node) => [panelKey(node), node])).values()]; }
+function firstNodeAppearance(node) {
+  const group = node?.type === 'supply' ? supplyGroup(node) : node?.type === 'panel' ? panelGroup(node) : [node];
+  return group.reduce((first, item) => !first || item.page < first.page ? item : first, null) || node;
+}
 function linkById(id) { return state.links.find((link) => link.id === id); }
 function selectedNodes() { return state.nodes.filter((node) => state.selectedIds.includes(node.id)); }
 function selectNode(id, additive = false) {
@@ -505,8 +509,8 @@ function addSupplyReference() {
   const original = uniqueSupplies().find((supply) => supplyKey(supply) === $('#supply-reference-choice').value);
   if (!original) return;
   checkpoint('add-supply-reference'); original.supplyKey ||= original.id;
-  const referencesOnPage = pageNodes().filter((node) => node.type === 'supply').length;
-  const supplyReference = { ...original, id: uid(), page: state.currentPage, x: 90, y: 135 + referencesOnPage * 95, socket: '' };
+  const firstSupplyAppearance = firstNodeAppearance(original);
+  const supplyReference = { ...firstSupplyAppearance, id: uid(), page: state.currentPage, x: firstSupplyAppearance.x, y: firstSupplyAppearance.y, socket: '' };
   const originalSupplyIds = new Set(supplyGroup(original).map((supply) => supply.id));
   const supplyLink = state.links.find((link) => !isReferenceLink(link) && originalSupplyIds.has(link.from) && nodeById(link.to)?.type === 'panel');
   const connectedPanel = supplyLink && nodeById(supplyLink.to);
@@ -514,8 +518,8 @@ function addSupplyReference() {
   state.nodes.push(supplyReference);
   if (connectedPanel && !panelReference) {
     connectedPanel.panelKey ||= connectedPanel.id;
-    const position = panelPosition(pageNodes().filter((node) => node.type === 'panel').length);
-    panelReference = { ...connectedPanel, id: uid(), page: state.currentPage, x: position.x, y: position.y, socket: '' };
+    const firstPanelAppearance = firstNodeAppearance(connectedPanel);
+    panelReference = { ...firstPanelAppearance, id: uid(), page: state.currentPage, x: firstPanelAppearance.x, y: firstPanelAppearance.y, socket: '' };
     state.nodes.push(panelReference);
   }
   autoRecallConnections();
