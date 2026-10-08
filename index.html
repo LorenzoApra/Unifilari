@@ -67,7 +67,6 @@
           <button type="button" class="sidebar-group-toggle" aria-expanded="false"><span>Richiami</span><span class="sidebar-chevron">⌄</span></button>
           <div class="sidebar-group-content button-grid">
             <button id="reuse-supply">Richiama fornitura</button>
-            <button id="reuse-panel">Richiama quadro</button>
             <button id="reuse-link">Richiama collegamento</button>
           </div>
         </section>
@@ -173,16 +172,8 @@
       <form method="dialog">
         <h2>Richiama una fornitura</h2>
         <label>Fornitura esistente<select id="supply-reference-choice"></select></label>
-        <p class="help">La fornitura verrà mostrata anche in questa pagina. Ogni richiamo può essere collegato a un solo quadro.</p>
+        <p class="help">La fornitura, il quadro direttamente collegato e il relativo collegamento verranno richiamati insieme.</p>
         <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-supply-reference" value="default">Aggiungi alla pagina</button></menu>
-      </form>
-    </dialog>
-    <dialog id="panel-reference-dialog">
-      <form method="dialog">
-        <h2>Richiama un quadro</h2>
-        <label>Quadro esistente<select id="panel-reference-choice"></select></label>
-        <p class="help">Il quadro verrà mostrato anche in questa pagina. Le sue prese rimangono condivise con gli altri richiami.</p>
-        <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-panel-reference" value="default">Aggiungi alla pagina</button></menu>
       </form>
     </dialog>
     <dialog id="link-reference-dialog">
@@ -285,7 +276,7 @@
         <menu><button type="button" id="cancel-project">Annulla</button><button type="submit" class="button primary" id="confirm-project">Salva</button></menu>
       </form>
     </dialog>
-    <script src="core.js?v=20261007-2"></script>
-    <script src="app.js?v=20261007-2"></script>
+    <script src="core.js?v=20261008-1"></script>
+    <script src="app.js?v=20261008-1"></script>
   </body>
 </html>

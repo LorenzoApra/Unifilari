@@ -506,22 +506,21 @@ function addSupplyReference() {
   if (!original) return;
   checkpoint('add-supply-reference'); original.supplyKey ||= original.id;
   const referencesOnPage = pageNodes().filter((node) => node.type === 'supply').length;
-  const node = { ...original, id: uid(), page: state.currentPage, x: 90, y: 135 + referencesOnPage * 95, socket: '' };
-  state.nodes.push(node); autoRecallConnections(); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#supply-reference-dialog').close(); markChanged(); render();
-}
-function openPanelReferenceDialog() {
-  const panels = uniquePanels().filter((panel) => !pageNodes().some((node) => node.type === 'panel' && panelKey(node) === panelKey(panel)));
-  if (!panels.length) return showStatus('Non ci sono quadri da richiamare in questa pagina.');
-  $('#panel-reference-choice').innerHTML = panels.map((panel) => `<option value="${panelKey(panel)}">${esc(panel.title)}${panel.details ? ` (${esc(panel.details)})` : ''}</option>`).join('');
-  $('#panel-reference-dialog').showModal();
-}
-function addPanelReference() {
-  const original = uniquePanels().find((panel) => panelKey(panel) === $('#panel-reference-choice').value);
-  if (!original) return;
-  checkpoint('add-panel-reference'); original.panelKey ||= original.id;
-  const position = panelPosition(pageNodes().filter((node) => node.type === 'panel').length);
-  const node = { ...original, id: uid(), page: state.currentPage, x: position.x, y: position.y, socket: '' };
-  state.nodes.push(node); autoRecallConnections(); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#panel-reference-dialog').close(); markChanged(); render();
+  const supplyReference = { ...original, id: uid(), page: state.currentPage, x: 90, y: 135 + referencesOnPage * 95, socket: '' };
+  const originalSupplyIds = new Set(supplyGroup(original).map((supply) => supply.id));
+  const supplyLink = state.links.find((link) => !isReferenceLink(link) && originalSupplyIds.has(link.from) && nodeById(link.to)?.type === 'panel');
+  const connectedPanel = supplyLink && nodeById(supplyLink.to);
+  let panelReference = connectedPanel && pageNodes().find((node) => node.type === 'panel' && panelKey(node) === panelKey(connectedPanel));
+  state.nodes.push(supplyReference);
+  if (connectedPanel && !panelReference) {
+    connectedPanel.panelKey ||= connectedPanel.id;
+    const position = panelPosition(pageNodes().filter((node) => node.type === 'panel').length);
+    panelReference = { ...connectedPanel, id: uid(), page: state.currentPage, x: position.x, y: position.y, socket: '' };
+    state.nodes.push(panelReference);
+  }
+  autoRecallConnections();
+  state.selected = supplyReference.id; state.selectedIds = panelReference ? [supplyReference.id, panelReference.id] : [supplyReference.id]; state.selectedLink = null;
+  $('#supply-reference-dialog').close(); markChanged(connectedPanel ? 'Fornitura, quadro e collegamento richiamati.' : 'Fornitura richiamata: non risulta collegata a un quadro.'); render();
 }
 function samePhysicalNode(first, second) {
   if (!first || !second || first.type !== second.type) return false;
@@ -1228,8 +1227,6 @@ function bind() {
   $('#reuse-supply').onclick = openSupplyReferenceDialog;
   $('#confirm-supply-reference').onclick = (event) => { event.preventDefault(); addSupplyReference(); };
   $('#add-panel').onclick = openPanelDialog;
-  $('#reuse-panel').onclick = openPanelReferenceDialog;
-  $('#confirm-panel-reference').onclick = (event) => { event.preventDefault(); addPanelReference(); };
   $('#reuse-link').onclick = openLinkReferenceDialog;
   $('#confirm-link-reference').onclick = (event) => { event.preventDefault(); addLinkReference(); };
   $('#add-temp-panel').onclick = openTemporaryPanelDialog;
