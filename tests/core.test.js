@@ -37,16 +37,27 @@ assert.equal(Core.compatibleConnector('powerlock400', 'powerlock250'), true);
 
 {
   const specialPanel = node({ ...mainPanel, id: 'panel-pb63-special', panelModel: 'PB63A#1' });
+  assert.deepEqual(
+    Core.panelSockets(specialPanel).filter((socket) => socket.type === 'cee16mono').map((socket) => socket.name),
+    ['R1', 'R2', 'S5', 'S6', 'T9', 'T10', 'R3', 'R4', 'S7', 'S8', 'T11', 'T12'],
+  );
   const specialLoads = Array.from({ length: 6 }, (_, index) => node({ ...load, id: `special-load-${index + 1}`, watts: 1000 }));
   const current = project([specialPanel, ...specialLoads]);
   specialLoads.forEach((item, index) => {
     item.socket = Core.availablePanelSockets(current, specialPanel, item)[0].name;
     current.links.push({ id: `special-link-${index + 1}`, from: specialPanel.id, to: item.id, cable: 'socapex', length: 20, socapexGroup: 'special-group' });
   });
-  assert.deepEqual(specialLoads.map((item) => item.socket), ['R1', 'S5', 'T9', 'R2', 'S6', 'T10']);
+  assert.deepEqual(specialLoads.map((item) => item.socket), ['R1', 'R2', 'S5', 'S6', 'T9', 'T10']);
   assert.deepEqual(Object.fromEntries(Object.entries(Core.calculatePhaseLoads(current).phases).map(([phase, value]) => [phase, value.watts])), { R: 2000, S: 2000, T: 2000 });
   assert.equal(Core.socketWarning(current, specialPanel, specialLoads[0], 'R3', current.links[0].id), '');
   assert.match(Core.socketWarning(current, specialPanel, specialLoads[0], 'S5', current.links[0].id), /occupata/);
+}
+
+{
+  const specialPanelWithLeadingZero = node({ ...mainPanel, id: 'panel-pb63-special-01', panelModel: 'PB63A#01' });
+  const standardPanel = node({ ...mainPanel, id: 'panel-pb63-standard-19', panelModel: 'PB63A#19' });
+  assert.equal(Core.panelSockets(specialPanelWithLeadingZero)[0].name, 'R1');
+  assert.equal(Core.panelSockets(standardPanel)[0].name, 'P1');
 }
 
 {

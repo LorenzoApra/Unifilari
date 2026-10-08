@@ -9,7 +9,7 @@
   const NODE_TYPES = new Set(['supply', 'panel', 'load']);
   const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
   const PB63A_SPECIAL_SOCKETS = [
-    ...['R1', 'S5', 'T9', 'R2', 'S6', 'T10', 'R3', 'S7', 'T11', 'R4', 'S8', 'T12'].map((name) => ({ name, type: 'cee16mono' })),
+    ...['R1', 'R2', 'S5', 'S6', 'T9', 'T10', 'R3', 'R4', 'S7', 'S8', 'T11', 'T12'].map((name) => ({ name, type: 'cee16mono' })),
     ...['R13', 'S14', 'T15'].map((name) => ({ name, type: 'cee32mono' })),
   ];
   const CEE_CONNECTORS = {
@@ -202,7 +202,7 @@
   }
 
   function panelSockets(panel) {
-    if (/^PB63A#(?:[1-9]|1[0-8])$/.test(panel?.panelModel || '')) {
+    if (/^PB63A#(?:0?[1-9]|1[0-8])$/.test(panel?.panelModel || '')) {
       return PB63A_SPECIAL_SOCKETS.map((socket) => ({ ...socket }));
     }
     let index = 0;
