@@ -1218,6 +1218,19 @@ function removeCurrentPage() {
   state.currentPage = Math.max(1, Math.min(removedPage, pagesCount()));
   state.selected = null; state.selectedIds = []; state.selectedLink = null; markChanged(`Pagina ${removedPage} eliminata.`); render();
 }
+function createPageAfter(page, atEnd = false) {
+  const pages = sortedPages(), lastPage = pages.at(-1) || 1, afterPage = atEnd ? lastPage : page;
+  const newPage = afterPage + 1;
+  checkpoint(atEnd ? 'append-page' : 'insert-page');
+  if (afterPage < lastPage) {
+    state.nodes.forEach((node) => { if (node.page > afterPage) node.page++; });
+    state.pages = pages.map((item) => item > afterPage ? item + 1 : item);
+  } else state.pages = [...pages];
+  if (!state.pages.includes(newPage)) state.pages.push(newPage);
+  state.pages.sort((first, second) => first - second);
+  state.currentPage = newPage; state.selected = null; state.selectedIds = []; state.selectedLink = null;
+  markChanged(atEnd || afterPage === lastPage ? `Pagina ${newPage} aggiunta in fondo.` : `Pagina ${newPage} inserita nel documento.`); render();
+}
 function togglePanel(element, button, open) {
   element.classList.toggle('open', open);
   button.setAttribute('aria-expanded', String(open));
@@ -1266,7 +1279,8 @@ function bind() {
   $('#previous-page').onclick = () => { const pages = sortedPages(), index = pages.indexOf(state.currentPage); if (index > 0) goToPage(pages[index - 1]); };
   $('#next-page').onclick = () => { const pages = sortedPages(), index = pages.indexOf(state.currentPage); if (index >= 0 && index < pages.length - 1) goToPage(pages[index + 1]); };
   $('#page-select').onchange = (event) => goToPage(Number(event.target.value));
-  $('#new-page').onclick = () => { checkpoint('new-page'); const page = pagesCount() + 1; state.pages.push(page); state.currentPage = page; state.selected = null; state.selectedIds = []; state.selectedLink = null; markChanged(`Pagina ${page} creata.`); render(); };
+  $('#new-page').onclick = () => createPageAfter(state.currentPage);
+  $('#append-page').onclick = () => createPageAfter(state.currentPage, true);
   $('#delete-page').onclick = removeCurrentPage;
 
   $('#property-form').addEventListener('input', (event) => {
