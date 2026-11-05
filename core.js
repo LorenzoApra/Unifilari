@@ -485,6 +485,10 @@
       meta: {
         name: asText(meta.name, '', 200),
         location: asText(meta.location, '', 300),
+        locationStreet: asText(meta.locationStreet, '', 200),
+        locationPostcode: asText(meta.locationPostcode, '', 20),
+        locationCity: asText(meta.locationCity, '', 120),
+        locationProvince: asText(meta.locationProvince, '', 120),
         type: asText(meta.type, 'Allestimento Luci', 200),
         revision: asText(meta.revision, '1.0', 50),
         company: asText(meta.company, 'ATS Srl', 200),

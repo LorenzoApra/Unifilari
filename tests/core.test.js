@@ -173,9 +173,13 @@ assert.equal(Core.compatibleConnector('powerlock400', 'powerlock250'), true);
 }
 
 {
-  const normalized = Core.normalizeProject({ meta: { name: 'Test' }, pages: [1], nodes: [load], links: [] });
+  const normalized = Core.normalizeProject({ meta: { name: 'Test', location: 'Via Roma 1, 10121 Torino (Torino)', locationStreet: 'Via Roma 1', locationPostcode: '10121', locationCity: 'Torino', locationProvince: 'Torino' }, pages: [1], nodes: [load], links: [] });
   assert.equal(normalized.version, Core.SCHEMA_VERSION);
   assert.equal(normalized.meta.name, 'Test');
+  assert.equal(normalized.meta.locationStreet, 'Via Roma 1');
+  assert.equal(normalized.meta.locationPostcode, '10121');
+  assert.equal(normalized.meta.locationCity, 'Torino');
+  assert.equal(normalized.meta.locationProvince, 'Torino');
   assert.deepEqual(normalized.pages, [1]);
 }
 

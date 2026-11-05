@@ -49,7 +49,7 @@ const NODE_HALF = 100;
 const AUTOSAVE_KEY = 'unifilari.autosave.v6';
 const HISTORY_LIMIT = 80;
 const MAX_LOADS_PER_PAGE = 18;
-let state = { version: Core.SCHEMA_VERSION, meta: { name: '', location: '', type: 'Allestimento Luci', revision: '1.0', company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '' }, pages: [1], currentPage: 1, selected: null, selectedIds: [], selectedLink: null, library: PANEL_LIBRARY, nodes: [], links: [] };
+let state = { version: Core.SCHEMA_VERSION, meta: { name: '', location: '', locationStreet: '', locationPostcode: '', locationCity: '', locationProvince: '', type: 'Allestimento Luci', revision: '1.0', company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '' }, pages: [1], currentPage: 1, selected: null, selectedIds: [], selectedLink: null, library: PANEL_LIBRARY, nodes: [], links: [] };
 let temporaryPorts = [{ type: 'cee16mono', quantity: 1 }];
 let editingTemporaryPanelId = null;
 let pendingLinkReferences = [];
@@ -66,6 +66,9 @@ let autosaveTimer = null;
 let renderFrame = null;
 let projectDialogMode = 'edit';
 let phaseSupplyFilter = '';
+let projectLocationResults = [];
+let projectLocationController = null;
+const projectLocationCache = new Map();
 
 function serializableProject() {
   return Core.serializeProject(state);
@@ -142,8 +145,7 @@ function resetHistory() {
   updateDirtyUi();
 }
 function syncMetaInputs() {
-  const ids = { name: 'project-event-name', location: 'project-location', type: 'project-type', revision: 'project-version', company: 'project-company-name', companyAddress: 'project-company-address', companyVat: 'project-company-vat' };
-  Object.entries(ids).forEach(([key, id]) => { const input = $(`#${id}`); if (input) input.value = state.meta[key] || ''; });
+  fillProjectForm(state.meta);
 }
 function projectIssues() {
   return Core.validateProject(state, { cableName: (id) => cableById(id).name });
@@ -905,10 +907,81 @@ function loadProjectText(text, options = {}) {
     return false;
   }
 }
+function formatProjectLocation(street, postcode, city, province) {
+  const locality = [postcode, city].filter(Boolean).join(' ');
+  return [street, locality && province ? `${locality} (${province})` : locality || province].filter(Boolean).join(', ');
+}
+function resetProjectLocationSearch() {
+  projectLocationController?.abort(); projectLocationController = null; projectLocationResults = [];
+  const search = $('#project-location-search'), results = $('#project-location-results'), status = $('#project-location-search-status');
+  if (search) search.value = '';
+  if (results) { results.innerHTML = ''; results.hidden = true; }
+  if (status) status.textContent = '';
+}
+function normalizeProvince(value) {
+  return String(value || '').replace(/^(?:Provincia|Città metropolitana) di\s+/i, '').replace(/^Metropolitan City of\s+/i, '').trim();
+}
+function photonLocation(feature) {
+  const properties = feature?.properties || {};
+  const namedStreet = properties.street || (properties.type === 'street' ? properties.name : '');
+  const street = [namedStreet || properties.name, properties.housenumber].filter(Boolean).join(' ').trim();
+  const city = properties.city || properties.town || properties.village || properties.municipality || properties.locality || '';
+  const province = normalizeProvince(properties.county || properties.state);
+  const postcode = properties.postcode || '';
+  const venue = properties.name && properties.name !== namedStreet && properties.name !== street ? properties.name : '';
+  const label = [venue, street, [postcode, city].filter(Boolean).join(' '), province].filter((value, index, values) => value && values.indexOf(value) === index).join(' · ');
+  return { street, postcode, city, province, venue, label: label || properties.name || 'Indirizzo' };
+}
+function renderProjectLocationResults(results) {
+  const container = $('#project-location-results'); projectLocationResults = results;
+  container.innerHTML = results.map((result, index) => `<button type="button" class="project-location-result" data-location-index="${index}"><strong>${esc(result.venue || result.street || result.label)}</strong><span>${esc([result.venue ? result.street : '', result.postcode, result.city, result.province].filter(Boolean).join(' · '))}</span></button>`).join('');
+  container.hidden = !results.length;
+  $('#project-location-search-status').textContent = results.length ? `${results.length} risultat${results.length === 1 ? 'o' : 'i'}: scegli l’indirizzo corretto.` : 'Nessun indirizzo trovato. Puoi compilare i campi manualmente.';
+}
+async function searchProjectLocation() {
+  const query = $('#project-location-search').value.trim(), status = $('#project-location-search-status'), button = $('#search-project-location');
+  if (query.length < 3) { status.textContent = 'Scrivi almeno 3 caratteri per cercare.'; return; }
+  const cacheKey = query.toLocaleLowerCase('it-IT');
+  if (projectLocationCache.has(cacheKey)) { renderProjectLocationResults(projectLocationCache.get(cacheKey)); return; }
+  projectLocationController?.abort(); const controller = new AbortController(); projectLocationController = controller;
+  button.disabled = true; status.textContent = 'Ricerca indirizzo in corso…'; $('#project-location-results').hidden = true;
+  try {
+    const url = new URL('https://photon.komoot.io/api/');
+    url.searchParams.set('q', query); url.searchParams.set('limit', '6'); url.searchParams.set('bbox', '6.4,35.3,18.8,47.2');
+    const response = await fetch(url, { signal: controller.signal, headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    const results = (Array.isArray(data.features) ? data.features : []).map(photonLocation).filter((result) => result.street || result.city);
+    projectLocationCache.set(cacheKey, results);
+    if (projectLocationCache.size > 30) projectLocationCache.delete(projectLocationCache.keys().next().value);
+    renderProjectLocationResults(results);
+  } catch (error) {
+    if (error.name !== 'AbortError') status.textContent = 'Ricerca momentaneamente non disponibile. Puoi compilare i campi manualmente.';
+  } finally {
+    if (projectLocationController === controller) { projectLocationController = null; button.disabled = false; }
+  }
+}
+function selectProjectLocation(index) {
+  const result = projectLocationResults[index]; if (!result) return;
+  $('#project-location-street').value = result.street;
+  $('#project-location-postcode').value = result.postcode;
+  $('#project-location-city').value = result.city;
+  $('#project-location-province').value = result.province;
+  $('#project-location-results').hidden = true;
+  $('#project-location-search-status').textContent = 'Indirizzo selezionato. Puoi correggere manualmente i campi prima di salvare.';
+}
 function projectMetaFromForm() {
+  const locationStreet = $('#project-location-street').value.trim();
+  const locationPostcode = $('#project-location-postcode').value.trim();
+  const locationCity = $('#project-location-city').value.trim();
+  const locationProvince = $('#project-location-province').value.trim();
   return {
     name: $('#project-event-name').value.trim(),
-    location: $('#project-location').value.trim(),
+    location: formatProjectLocation(locationStreet, locationPostcode, locationCity, locationProvince),
+    locationStreet,
+    locationPostcode,
+    locationCity,
+    locationProvince,
     type: $('#project-type').value.trim(),
     revision: $('#project-version').value.trim(),
     company: $('#project-company-name').value.trim(),
@@ -917,14 +990,20 @@ function projectMetaFromForm() {
   };
 }
 function fillProjectForm(meta) {
-  const ids = { name: 'project-event-name', location: 'project-location', type: 'project-type', revision: 'project-version', company: 'project-company-name', companyAddress: 'project-company-address', companyVat: 'project-company-vat' };
+  const ids = { name: 'project-event-name', type: 'project-type', revision: 'project-version', company: 'project-company-name', companyAddress: 'project-company-address', companyVat: 'project-company-vat' };
   Object.entries(ids).forEach(([key, id]) => { $(`#${id}`).value = meta[key] || ''; });
+  const hasStructuredLocation = Boolean(meta.locationStreet || meta.locationPostcode || meta.locationCity || meta.locationProvince);
+  $('#project-location-street').value = meta.locationStreet || (!hasStructuredLocation ? meta.location || '' : '');
+  $('#project-location-postcode').value = meta.locationPostcode || '';
+  $('#project-location-city').value = meta.locationCity || '';
+  $('#project-location-province').value = meta.locationProvince || '';
+  resetProjectLocationSearch();
 }
 function openProjectDialog(mode = 'edit') {
   projectDialogMode = mode;
   const creating = mode === 'new';
   const defaults = creating
-    ? { name: '', location: '', type: 'Allestimento Luci', revision: '1.0', company: state.meta.company || 'ATS Srl', companyAddress: state.meta.companyAddress || '', companyVat: state.meta.companyVat || '' }
+    ? { name: '', location: '', locationStreet: '', locationPostcode: '', locationCity: '', locationProvince: '', type: 'Allestimento Luci', revision: '1.0', company: state.meta.company || 'ATS Srl', companyAddress: state.meta.companyAddress || '', companyVat: state.meta.companyVat || '' }
     : state.meta;
   fillProjectForm(defaults);
   $('#project-dialog-title').textContent = creating ? 'Nuovo progetto' : 'Proprietà progetto';
@@ -1238,7 +1317,10 @@ function togglePanel(element, button, open) {
 function bind() {
   $('#edit-project').onclick = () => openProjectDialog('edit');
   $('#project-dialog-form').addEventListener('submit', (event) => { event.preventDefault(); confirmProjectProperties(); });
-  $('#cancel-project').onclick = () => $('#project-dialog').close();
+  $('#cancel-project').onclick = () => { projectLocationController?.abort(); $('#project-dialog').close(); };
+  $('#search-project-location').onclick = searchProjectLocation;
+  $('#project-location-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); searchProjectLocation(); } });
+  $('#project-location-results').onclick = (event) => { const button = event.target.closest('[data-location-index]'); if (button) selectProjectLocation(Number(button.dataset.locationIndex)); };
 
   $('#add-supply').onclick = () => addNode('supply');
   $('#reuse-supply').onclick = openSupplyReferenceDialog;

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unifilari ATS</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=20261105-1" />
   </head>
   <body>
     <header class="topbar">
@@ -265,7 +265,21 @@
       <form method="dialog" id="project-dialog-form">
         <h2 id="project-dialog-title">Proprietà progetto</h2>
         <label>Nome evento<input id="project-event-name" placeholder="Nome evento" required /></label>
-        <label>Luogo<input id="project-location" placeholder="Luogo" required /></label>
+        <fieldset class="project-location-fields">
+          <legend>Luogo</legend>
+          <label>Cerca indirizzo
+            <span class="project-address-search"><input id="project-location-search" placeholder="Es. Piazza Castello 1, Torino" autocomplete="off" /><button type="button" id="search-project-location">Cerca</button></span>
+          </label>
+          <div id="project-location-search-status" class="project-location-search-status" role="status"></div>
+          <div id="project-location-results" class="project-location-results" hidden></div>
+          <div class="project-location-grid">
+            <label class="project-location-street">Via / Strada / Piazza<input id="project-location-street" placeholder="Via e numero civico" required /></label>
+            <label>CAP<input id="project-location-postcode" inputmode="numeric" placeholder="CAP" /></label>
+            <label>Comune<input id="project-location-city" placeholder="Comune" /></label>
+            <label>Provincia<input id="project-location-province" placeholder="Provincia" /></label>
+          </div>
+          <small class="project-location-attribution">Ricerca indirizzi: Photon · dati © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap contributors</a></small>
+        </fieldset>
         <label>Tipologia<input id="project-type" value="Allestimento Luci" required /></label>
         <label>Versione<input id="project-version" value="1.0" required /></label>
         <fieldset class="project-company-fields">
@@ -277,7 +291,7 @@
         <menu><button type="button" id="cancel-project">Annulla</button><button type="submit" class="button primary" id="confirm-project">Salva</button></menu>
       </form>
     </dialog>
-    <script src="core.js?v=20261013-1"></script>
-    <script src="app.js?v=20261013-1"></script>
+    <script src="core.js?v=20261105-1"></script>
+    <script src="app.js?v=20261105-1"></script>
   </body>
 </html>
