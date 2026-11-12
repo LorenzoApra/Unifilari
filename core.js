@@ -21,6 +21,16 @@
     cee125tri: { family: 'tri', amps: 125 },
   };
 
+  function createId(cryptoProvider = globalThis.crypto) {
+    if (typeof cryptoProvider.randomUUID === 'function') return cryptoProvider.randomUUID();
+    // getRandomValues è disponibile anche quando randomUUID richiede HTTPS.
+    const bytes = cryptoProvider.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+
   function isPlainObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
   }
@@ -64,10 +74,6 @@
     const supply = CEE_CONNECTORS[sourceType];
     const input = CEE_CONNECTORS[inputType];
     return Boolean(supply && input && supply.family === input.family && supply.amps <= input.amps);
-  }
-
-  function supplyCanFeedInput(supplyType, inputType) {
-    return connectorCanFeedInput(supplyType, inputType);
   }
 
   function cableSectionMatchesConnector(connectorType, sectionType) {
@@ -189,15 +195,10 @@
     return (project.nodes || []).filter((node) => node.type === 'load' && !connectedTargets.has(node.id)).map((node) => node.id);
   }
 
-  function samePhysicalSource(first, second) {
+  function samePhysicalNode(first, second) {
     if (!first || !second || first.type !== second.type) return false;
     if (first.type === 'panel') return panelKey(first) === panelKey(second);
-    return first.id === second.id;
-  }
-
-  function samePhysicalTarget(first, second) {
-    if (!first || !second || first.type !== second.type) return false;
-    if (first.type === 'panel') return panelKey(first) === panelKey(second);
+    if (first.type === 'supply') return supplyKey(first) === supplyKey(second);
     return first.id === second.id;
   }
 
@@ -235,6 +236,19 @@
     });
   }
 
+  function availableSocapexSockets(project, panel, ignoredGroupId = null) {
+    const nodes = createNodeIndex(project);
+    const physicalLinks = (project.links || []).filter((link) => !isReferenceLink(link) && panelKey(nodes.get(link.from)) === panelKey(panel) && (!ignoredGroupId || link.socapexGroup !== ignoredGroupId));
+    const available = availablePanelSockets({ ...project, links: physicalLinks }, panel, { type: 'load', plugType: 'cee16mono' });
+    if (!/^PB63A#(?:0?[1-9]|1[0-8])$/.test(panel?.panelModel || '')) return available;
+    // Un Socapex parziale conserva il suo banco: T10 non passa al gruppo successivo.
+    const banks = [PB63A_SPECIAL_SOCKETS.slice(0, 6), PB63A_SPECIAL_SOCKETS.slice(6, 12)];
+    const assigned = new Set(physicalLinks.filter((link) => link.socapexGroup).map((link) => nodes.get(link.to)?.socket));
+    const free = new Set(available.map((socket) => socket.name));
+    const bank = banks.find((sockets) => !sockets.some((socket) => assigned.has(socket.name)) && sockets.some((socket) => free.has(socket.name)));
+    return bank ? bank.filter((socket) => free.has(socket.name)).map((socket) => ({ ...socket })) : [];
+  }
+
   function socketWarning(project, panel, target, socket, ignoredLinkId = null, cableName = (id) => id, nodeIndex = null) {
     if (panel?.type !== 'panel' || !socket) return '';
     const required = requiredPlug(target);
@@ -249,20 +263,25 @@
   }
 
   function createsCycle(project, fromId, toId, ignoredLinkId = null) {
+    const nodes = createNodeIndex(project);
+    const physicalKey = (id) => {
+      const node = nodes.get(id);
+      return node?.type === 'panel' ? `panel:${panelKey(node)}` : node?.type === 'supply' ? `supply:${supplyKey(node)}` : `load:${id}`;
+    };
+    const fromKey = physicalKey(fromId), toKey = physicalKey(toId);
     const adjacency = new Map();
     (project.links || [])
       .filter((link) => !isReferenceLink(link) && link.id !== ignoredLinkId)
       .forEach((link) => {
-        if (!adjacency.has(link.from)) adjacency.set(link.from, []);
-        adjacency.get(link.from).push(link.to);
+        const source = physicalKey(link.from), target = physicalKey(link.to);
+        if (!adjacency.has(source)) adjacency.set(source, []);
+        adjacency.get(source).push(target);
       });
-    if (!adjacency.has(fromId)) adjacency.set(fromId, []);
-    adjacency.get(fromId).push(toId);
-    const stack = [toId];
+    const stack = [toKey];
     const visited = new Set();
     while (stack.length) {
       const current = stack.pop();
-      if (current === fromId) return true;
+      if (current === fromKey) return true;
       if (visited.has(current)) continue;
       visited.add(current);
       (adjacency.get(current) || []).forEach((next) => stack.push(next));
@@ -311,14 +330,14 @@
     }
 
     if (from.type === 'supply') {
-      if (!supplyCanFeedInput(from.supplyType, required)) {
+      if (!connectorCanFeedInput(from.supplyType, required)) {
         return connectionFailure(
           `La fornitura ${cableName(from.supplyType)} non è compatibile con l’ingresso ${cableName(required)} del quadro.`,
           'incompatible-supply',
         );
       }
       const alreadyUsed = (project.links || []).some(
-        (link) => !isReferenceLink(link) && link.id !== ignoredLinkId && link.from === from.id,
+        (link) => !isReferenceLink(link) && link.id !== ignoredLinkId && samePhysicalNode(nodeById(project, link.from, nodeIndex), from),
       );
       if (alreadyUsed) return connectionFailure(`La fornitura ${from.title} può alimentare un solo quadro.`, 'supply-already-used');
     }
@@ -341,7 +360,7 @@
 
     const alreadyIncoming = (project.links || []).some((link) => {
       if (isReferenceLink(link) || link.id === ignoredLinkId) return false;
-      return samePhysicalTarget(nodeById(project, link.to, nodeIndex), to);
+      return samePhysicalNode(nodeById(project, link.to, nodeIndex), to);
     });
     if (alreadyIncoming) {
       return connectionFailure(
@@ -361,7 +380,7 @@
     const ids = new Set();
     const nodeIndex = createNodeIndex(project);
     (project.nodes || []).forEach((node) => {
-      if (ids.has(node.id)) issues.push({ code: 'duplicate-node', message: `Identificativo duplicato: ${node.id}.` });
+      if (ids.has(node.id)) issues.push({ code: 'duplicate-node', nodeId: node.id, message: `Identificativo duplicato: ${node.id}.` });
       ids.add(node.id);
     });
     (project.links || []).forEach((link) => {
@@ -416,7 +435,6 @@
     if (type === 'panel') {
       node.panelKey = assertSafeId(raw.panelKey || raw.id, 'L’identificativo del quadro');
       node.panelModel = asText(raw.panelModel, 'Temporaneo', 100);
-      node.panelMode = asText(raw.panelMode, '', 100);
       node.inputType = assertSafeId(raw.inputType || 'cee63tri', 'Il tipo di ingresso');
       node.ports = Array.isArray(raw.ports) ? raw.ports.map(normalizePort) : [];
     }
@@ -439,6 +457,8 @@
       length: asFiniteNumber(raw.length, 20, 0, 10000),
     };
     if (raw.referenceLink) link.referenceLink = true;
+    if (raw.hideCableSection === true) link.hideCableSection = true;
+    if (raw.hideLength === true) link.hideLength = true;
     if (raw.socapexGroup) link.socapexGroup = assertSafeId(raw.socapexGroup, 'Il gruppo Socapex');
     if (Number.isFinite(Number(raw.labelX))) link.labelX = asFiniteNumber(raw.labelX, 0, 0, 1200);
     if (Number.isFinite(Number(raw.labelY))) link.labelY = asFiniteNumber(raw.labelY, 0, 0, 780);
@@ -454,11 +474,51 @@
     return link;
   }
 
+  function migrateProject(raw) {
+    if (raw.version !== undefined && (!Number.isInteger(raw.version) || raw.version < 1 || raw.version > SCHEMA_VERSION)) {
+      throw new Error('Versione progetto non supportata.');
+    }
+    if (raw.version === SCHEMA_VERSION) return raw;
+    const nodes = raw.nodes.map((node) => ({ ...node }));
+    let links = raw.links.map((link) => ({ ...link }));
+    nodes.filter((node) => node.type === 'socapex').forEach((socapex) => {
+      const incoming = links.find((link) => link.to === socapex.id);
+      const outgoing = links.filter((link) => link.from === socapex.id);
+      if (incoming && outgoing.length) {
+        const socapexGroup = createId();
+        outgoing.forEach((link, index) => links.push({
+          id: createId(), from: incoming.from, to: link.to, cable: 'socapex',
+          length: incoming.length ?? 20, socapexGroup,
+          ...(index === 0 ? { labelX: incoming.labelX, labelY: incoming.labelY } : {}),
+        }));
+      }
+      links = links.filter((link) => link.from !== socapex.id && link.to !== socapex.id);
+    });
+    const nodeIndex = new Map(nodes.map((node) => [node.id, node]));
+    nodes.filter((node) => node.type === 'supply' && node.supplyType === 'powerlock').forEach((node) => {
+      node.supplyType = 'powerlock250';
+      node.subtitle = 'PowerLock 250 A trifase';
+    });
+    links.forEach((link) => {
+      if (link.cable === 'powerlock') link.cable = nodeIndex.get(link.from)?.supplyType === 'powerlock400' ? 'powerlock400' : 'powerlock250';
+      const target = nodeIndex.get(link.to);
+      if (target?.type === 'panel' && target.inputType?.startsWith('cee')) {
+        const previousCable = link.cable;
+        link.cable = target.inputType;
+        if (!link.cableSection || link.cableSection === previousCable) link.cableSection = target.inputType;
+      }
+    });
+    return { ...raw, version: SCHEMA_VERSION, nodes: nodes.filter((node) => node.type !== 'socapex'), links };
+  }
+
   function normalizeProject(raw) {
     if (!isPlainObject(raw)) throw new Error('Il file non contiene un progetto valido.');
+    if (!Array.isArray(raw.nodes) || !Array.isArray(raw.links)) throw new Error('Il progetto deve contenere gli elenchi di elementi e collegamenti.');
+    if (raw.nodes.some((node) => !isPlainObject(node)) || raw.links.some((link) => !isPlainObject(link))) throw new Error('Il progetto contiene un elemento o collegamento non valido.');
+    raw = migrateProject(raw);
     const meta = isPlainObject(raw.meta) ? raw.meta : {};
-    const nodes = Array.isArray(raw.nodes) ? raw.nodes.map(normalizeNode) : [];
-    const links = Array.isArray(raw.links) ? raw.links.map(normalizeLink) : [];
+    const nodes = raw.nodes.map(normalizeNode);
+    const links = raw.links.map(normalizeLink);
     const nodeIds = new Set(nodes.map((node) => node.id));
     if (nodeIds.size !== nodes.length) throw new Error('Il progetto contiene elementi con identificativi duplicati.');
     const linkIds = new Set(links.map((link) => link.id));
@@ -491,11 +551,12 @@
         locationProvince: asText(meta.locationProvince, '', 120),
         type: asText(meta.type, 'Allestimento Luci', 200),
         revision: asText(meta.revision, '1.0', 50),
-        company: asText(meta.company, 'ATS Srl', 200),
+        company: asText(meta.company, '', 200),
         companyAddress: asText(meta.companyAddress, '', 500),
         companyVat: asText(meta.companyVat, '', 100),
       },
       pages,
+      pageNames: Object.fromEntries(sourcePages.filter((page) => isPlainObject(raw.pageNames) && asText(raw.pageNames[page], '', 80).trim()).map((page) => [pageMap.get(page), asText(raw.pageNames[page], '', 80).trim()])),
       currentPage: pageMap.get(requestedPage) || pages[0],
       nodes,
       links,
@@ -507,6 +568,7 @@
       version: SCHEMA_VERSION,
       meta: { ...state.meta },
       pages: [...new Set(state.pages || [1])].sort((first, second) => first - second),
+      ...(state.pageNames && Object.keys(state.pageNames).length ? { pageNames: { ...state.pageNames } } : {}),
       nodes: (state.nodes || []).map((node) => {
         const copy = { ...node };
         delete copy.selected;
@@ -605,22 +667,44 @@
     };
   }
 
+  function distributeNodes(rawItems, axis, options = {}) {
+    if (!Array.isArray(rawItems) || rawItems.length < 3 || !['x', 'y'].includes(axis)) return { ok: false, reason: 'invalid-selection', positions: [] };
+    const sizeKey = axis === 'x' ? 'width' : 'height';
+    const items = rawItems.map((item) => ({ ...item, [axis]: Number(item[axis]), [sizeKey]: Math.max(1, Number(item[sizeKey]) || 1) })).sort((a, b) => a[axis] - b[axis]);
+    if (items.some((item) => !item.id || !Number.isFinite(item[axis]))) return { ok: false, reason: 'invalid-selection', positions: [] };
+    const minimum = axis === 'x' ? 10 : 15, maximum = axis === 'x' ? 1190 : 735;
+    const totalSize = items.reduce((sum, item) => sum + item[sizeKey], 0), minimumGap = options.gap ?? 18;
+    const first = items[0], last = items.at(-1), low = first[axis] - first[sizeKey] / 2, high = last[axis] + last[sizeKey] / 2;
+    const span = Math.max(high - low, totalSize + minimumGap * (items.length - 1));
+    if (span > maximum - minimum) return { ok: false, reason: 'insufficient-space', positions: [] };
+    let cursor = Math.max(minimum, Math.min(maximum - span, (low + high - span) / 2));
+    const gap = (span - totalSize) / (items.length - 1);
+    return { ok: true, positions: items.map((item) => {
+      const position = { id: item.id, x: item.x, y: item.y, [axis]: cursor + item[sizeKey] / 2 };
+      cursor += item[sizeKey] + gap;
+      return position;
+    }) };
+  }
+
   return {
     SCHEMA_VERSION,
     alignNodesWithoutOverlap,
     availablePanelSockets,
+    availableSocapexSockets,
     calculatePhaseLoads,
     compatibleConnector,
     connectorCanFeedInput,
+    createId,
+    distributeNodes,
     isPowerLock,
     isReferenceLink,
     normalizeProject,
     panelKey,
     panelSockets,
     requiredPlug,
+    samePhysicalNode,
     serializeProject,
     socketWarning,
-    supplyCanFeedInput,
     supplyKey,
     unconnectedLoadIds,
     validateConnection,

@@ -295,4 +295,123 @@ assert.equal(Core.compatibleConnector('powerlock400', 'powerlock250'), true);
   assert.equal(onlyB.phases.S.watts, 0);
 }
 
+{
+  const ids = new Set(Array.from({ length: 100 }, () => Core.createId({ getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto) })));
+  assert.equal(ids.size, 100);
+  ids.forEach((id) => assert.match(id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/));
+}
+
+{
+  const legacy = {
+    version: 5, meta: {}, pages: [1],
+    nodes: [mainPanel, { id: 'legacy-socapex', type: 'socapex', page: 1 }, load],
+    links: [
+      { id: 'legacy-in', from: mainPanel.id, to: 'legacy-socapex', cable: 'socapex', length: 0, labelX: 300, labelY: 80 },
+      { id: 'legacy-out', from: 'legacy-socapex', to: load.id, cable: 'cee16mono' },
+    ],
+  };
+  const original = JSON.stringify(legacy);
+  const migrated = Core.normalizeProject(legacy);
+  assert.equal(migrated.nodes.length, 2);
+  assert.equal(migrated.links.length, 1);
+  assert.equal(migrated.links[0].from, mainPanel.id);
+  assert.equal(migrated.links[0].to, load.id);
+  assert.equal(migrated.links[0].cable, 'socapex');
+  assert.equal(migrated.links[0].length, 0);
+  assert.equal(migrated.links[0].labelX, 300);
+  assert.ok(migrated.links[0].socapexGroup);
+  assert.equal(JSON.stringify(legacy), original, 'La migrazione non deve modificare il file originale');
+}
+
+{
+  const oldSupply = { ...supply, supplyType: 'powerlock' };
+  const oldPanel = { ...mainPanel, inputType: 'powerlock' };
+  const migrated = Core.normalizeProject({ ...project([oldSupply, oldPanel], [{ id: 'old-powerlock', from: supply.id, to: mainPanel.id, cable: 'powerlock' }]), version: 5 });
+  assert.equal(migrated.nodes[0].supplyType, 'powerlock250');
+  assert.equal(migrated.links[0].cable, 'powerlock250');
+  assert.equal(Core.validateProject(migrated).length, 0);
+  const current = Core.normalizeProject(project([supply, mainPanel], [{ id: 'invalid-current-cable', from: supply.id, to: mainPanel.id, cable: 'cee16mono' }]));
+  assert.equal(current.links[0].cable, 'cee16mono', 'Un progetto attuale non deve essere riscritto dalle migrazioni');
+  assert.equal(Core.validateProject(current)[0].code, 'invalid-cable');
+}
+
+{
+  assert.throws(() => Core.normalizeProject({}), /elenchi/);
+  assert.throws(() => Core.normalizeProject({ ...project([]), version: Core.SCHEMA_VERSION + 1 }), /versione/i);
+  assert.throws(() => Core.normalizeProject({ ...project([]), nodes: [null] }), /non valido/i);
+}
+
+{
+  const supplyReference = { ...supply, id: 'supply-reference', page: 2 };
+  const otherPanel = { ...mainPanel, id: 'other-panel', panelKey: 'other-panel-key' };
+  const current = project([supply, supplyReference, mainPanel, otherPanel], [{ id: 'supply-used', from: supply.id, to: mainPanel.id, cable: 'cee125tri' }]);
+  assert.equal(validateConnection(current, { id: 'second-supply-use', from: supplyReference.id, to: otherPanel.id, cable: 'cee125tri' }).code, 'supply-already-used');
+}
+
+{
+  const panelA = { ...secondaryPanel, id: 'cycle-a', panelKey: 'physical-cycle-a' };
+  const panelB = { ...secondaryPanel, id: 'cycle-b', panelKey: 'physical-cycle-b' };
+  const referenceA = { ...panelA, id: 'cycle-a-reference', page: 2 };
+  const referenceB = { ...panelB, id: 'cycle-b-reference', page: 2 };
+  const current = project([panelA, panelB, referenceA, referenceB], [{ id: 'cycle-forward', from: panelA.id, to: panelB.id, cable: 'cee63tri' }]);
+  assert.equal(validateConnection(current, { id: 'cycle-return', from: referenceB.id, to: referenceA.id, cable: 'cee63tri' }).code, 'cycle');
+}
+
+{
+  const panel = { ...mainPanel, panelModel: 'PB63A#6' };
+  const firstBank = ['R1', 'R2', 'S5', 'S6', 'T9'];
+  const loads = firstBank.map((socket, index) => ({ ...load, id: `first-bank-${index}`, socket }));
+  const current = project([panel, ...loads], loads.map((item, index) => ({ id: `first-bank-link-${index}`, from: panel.id, to: item.id, cable: 'socapex', socapexGroup: 'socapex-first' })));
+  assert.equal(Core.availablePanelSockets(current, panel, load)[0].name, 'T10');
+  assert.deepEqual(Core.availableSocapexSockets(current, panel).map((socket) => socket.name), ['R3', 'R4', 'S7', 'S8', 'T11', 'T12']);
+  const recalled = { ...panel, id: 'socapex-panel-reference', page: 2 };
+  current.nodes.push(recalled);
+  assert.equal(Core.availableSocapexSockets(current, recalled)[0].name, 'R3');
+  assert.equal(Core.availableSocapexSockets(current, recalled, 'socapex-first')[0].name, 'R1');
+  current.nodes.push({ ...load, id: 'second-bank-load', socket: 'R3' });
+  current.links.push({ id: 'second-bank-link', from: recalled.id, to: 'second-bank-load', cable: 'socapex', socapexGroup: 'socapex-second' });
+  assert.deepEqual(Core.availableSocapexSockets(current, panel), [], 'Due Socapex parziali mantengono i due banchi separati');
+  current.links = current.links.filter((link) => link.socapexGroup !== 'socapex-first');
+  assert.equal(Core.availableSocapexSockets(current, panel)[0].name, 'R1');
+}
+
+{
+  const raw = project([mainPanel, load], [{ id: 'hidden-label', from: mainPanel.id, to: load.id, cable: 'cee16mono', cableSection: 'cee32mono', length: 25, hideCableSection: true, hideLength: true }]);
+  const saved = Core.serializeProject(Core.normalizeProject(raw));
+  const reopened = Core.normalizeProject(saved);
+  assert.equal(reopened.links[0].hideCableSection, true);
+  assert.equal(reopened.links[0].hideLength, true);
+  assert.equal(reopened.links[0].cableSection, 'cee32mono');
+  assert.equal(reopened.links[0].length, 25);
+  assert.equal(Core.normalizeProject(project([])).meta.company, '');
+}
+
+{
+  const items = [
+    { id: 'space-a', x: 300, y: 100, width: 200, height: 50 },
+    { id: 'space-b', x: 300, y: 200, width: 200, height: 80 },
+    { id: 'space-c', x: 300, y: 500, width: 200, height: 60 },
+  ];
+  const before = JSON.stringify(items);
+  const result = Core.distributeNodes(items, 'y');
+  assert.equal(result.ok, true);
+  const positions = result.positions;
+  const firstGap = positions[1].y - 40 - (positions[0].y + 25);
+  const secondGap = positions[2].y - 30 - (positions[1].y + 40);
+  assert.equal(firstGap, secondGap);
+  assert.equal(positions[0].y, 100);
+  assert.equal(positions[2].y, 500);
+  assert.equal(JSON.stringify(items), before);
+  assert.equal(Core.distributeNodes(items.map((item) => ({ ...item, height: 300 })), 'y').reason, 'insufficient-space');
+}
+
+{
+  const named = Core.normalizeProject({ version: 6, meta: {}, pages: [4, 9], currentPage: 9, pageNames: { 4: ' Palco ', 9: 'Regia', 999: 'Da scartare' }, nodes: [{ ...load, page: 9 }], links: [] });
+  assert.deepEqual(named.pageNames, { 1: 'Palco', 2: 'Regia' });
+  assert.equal(named.currentPage, 2);
+  const reopened = Core.normalizeProject(Core.serializeProject(named));
+  assert.deepEqual(reopened.pageNames, named.pageNames);
+  assert.equal(Core.serializeProject(project([])).pageNames, undefined);
+}
+
 console.log('Core domain tests: OK');

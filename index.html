@@ -4,11 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unifilari ATS</title>
-    <link rel="stylesheet" href="styles.css?v=20261105-1" />
+    <link rel="stylesheet" href="styles.css?v=20261111-3" />
   </head>
   <body>
     <header class="topbar">
-      <button type="button" class="icon-button mobile-only" id="toggle-sidebar" aria-label="Apri strumenti" aria-expanded="false">☰</button>
+      <button type="button" class="icon-button mobile-only" id="toggle-sidebar" aria-label="Apri strumenti" aria-controls="sidebar" aria-expanded="false">☰</button>
       <div class="brand"><span class="brand-mark">U</span><span>Unifilari</span></div>
       <div id="project-name" class="project-name">Nuovo progetto</div>
       <div id="save-state" class="save-state" role="status">Nuovo progetto</div>
@@ -18,15 +18,16 @@
         <button type="button" class="button quiet" id="new-project">Nuovo</button>
         <button type="button" class="button quiet" id="edit-project">Proprietà</button>
         <button class="button quiet" id="save-project">Salva progetto</button>
-        <label class="button quiet">Apri progetto<input id="open-project" type="file" accept="application/json,.json" hidden /></label>
+        <button type="button" class="button quiet" data-file-input="open-project">Apri progetto</button>
+        <input id="open-project" type="file" accept="application/json,.json" hidden />
         <button class="button primary" id="print-project">Esporta PDF</button>
       </div>
     </header>
 
     <main class="app-shell">
-      <aside class="sidebar no-print">
+      <aside class="sidebar no-print" id="sidebar" aria-label="Strumenti">
         <section class="sidebar-group open">
-          <button type="button" class="sidebar-group-toggle" aria-expanded="true"><span>Aggiungi</span><span class="sidebar-chevron">⌄</span></button>
+          <button type="button" class="sidebar-group-toggle" aria-expanded="true"><span>Aggiungi</span><span class="sidebar-chevron" aria-hidden="true">⌄</span></button>
           <div class="sidebar-group-content">
             <div class="button-grid">
               <button id="add-supply">Fornitura</button>
@@ -39,15 +40,16 @@
         </section>
 
         <section class="sidebar-group">
-          <button type="button" class="sidebar-group-toggle" aria-expanded="false"><span>Importa</span><span class="sidebar-chevron">⌄</span></button>
+          <button type="button" class="sidebar-group-toggle" aria-expanded="false"><span>Importa</span><span class="sidebar-chevron" aria-hidden="true">⌄</span></button>
           <div class="sidebar-group-content">
-            <label class="drop-target">CSV da Capture<input id="capture-file" type="file" accept=".csv,text/csv" hidden /><span>Fixture, Wattage, Circuit</span></label>
+            <button type="button" class="drop-target" data-file-input="capture-file">CSV da Capture<span>Fixture, Wattage, Circuit</span></button>
+            <input id="capture-file" type="file" accept=".csv,text/csv" hidden />
             <p class="help">I circuiti vengono raggruppati e l’assorbimento viene sommato.</p>
           </div>
         </section>
 
         <section class="sidebar-group">
-          <button type="button" class="sidebar-group-toggle" aria-expanded="false"><span>Collegamenti</span><span class="sidebar-chevron">⌄</span></button>
+          <button type="button" class="sidebar-group-toggle" aria-expanded="false"><span>Collegamenti</span><span class="sidebar-chevron" aria-hidden="true">⌄</span></button>
           <div class="sidebar-group-content button-grid">
             <button id="add-link">Collegamento</button>
             <button id="connect-selected">Collega selezionati</button>
@@ -56,15 +58,17 @@
         </section>
 
         <section class="sidebar-group">
-          <button type="button" class="sidebar-group-toggle" aria-expanded="false"><span>Disponi</span><span class="sidebar-chevron">⌄</span></button>
+          <button type="button" class="sidebar-group-toggle" aria-expanded="false"><span>Disponi</span><span class="sidebar-chevron" aria-hidden="true">⌄</span></button>
           <div class="sidebar-group-content button-grid">
             <button id="arrange-selected">Ordina selezionati</button>
             <button id="align-selected">Allinea selezionati</button>
+            <button type="button" id="distribute-vertical">Spazia in verticale</button>
+            <button type="button" id="distribute-horizontal">Spazia in orizzontale</button>
           </div>
         </section>
 
         <section class="sidebar-group">
-          <button type="button" class="sidebar-group-toggle" aria-expanded="false"><span>Richiami</span><span class="sidebar-chevron">⌄</span></button>
+          <button type="button" class="sidebar-group-toggle" aria-expanded="false"><span>Richiami</span><span class="sidebar-chevron" aria-hidden="true">⌄</span></button>
           <div class="sidebar-group-content button-grid">
             <button id="reuse-supply">Richiama fornitura</button>
             <button id="reuse-link">Richiama collegamento</button>
@@ -104,7 +108,7 @@
 
       <section class="workspace">
         <div class="workspace-toolbar no-print">
-          <div><strong id="page-label">Pagina 1</strong><span id="page-summary"></span><span id="status-message" role="status"></span></div>
+          <div><strong id="page-label">Pagina 1</strong><span id="page-summary"></span></div>
           <div class="page-buttons">
             <button type="button" id="previous-page" aria-label="Pagina precedente">←</button>
             <select id="page-select" aria-label="Vai alla pagina"></select>
@@ -112,28 +116,48 @@
             <button type="button" id="new-page" title="Inserisci una pagina dopo quella corrente">+ Dopo</button>
             <button type="button" id="append-page" title="Aggiungi una pagina alla fine del documento">+ In fondo</button>
             <button type="button" id="delete-page" title="Elimina pagina">− Pagina</button>
+            <button type="button" id="manage-pages">Pagine</button>
+            <button type="button" id="show-issues">Controlli <span id="issues-count">0</span></button>
           </div>
         </div>
-        <div id="sheet-wrapper">
+        <div id="status-message" class="status-banner no-print" role="status" hidden></div>
+        <div id="workflow-guide" class="workflow-guide no-print" hidden></div>
+        <div id="selection-toolbar" class="selection-toolbar no-print" role="toolbar" aria-label="Azioni sulla selezione" hidden></div>
+        <div class="view-toolbar no-print" role="toolbar" aria-label="Vista del foglio">
+          <div class="zoom-controls">
+            <button type="button" id="zoom-out" aria-label="Riduci zoom">−</button>
+            <select id="zoom-level" aria-label="Zoom del foglio"><option value="fit">Adatta</option><option value="0.25">25%</option><option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="2.5">250%</option></select>
+            <button type="button" id="zoom-in" aria-label="Aumenta zoom">+</button>
+            <span id="zoom-readout">100%</span>
+          </div>
+          <div class="view-actions"><button type="button" id="fit-sheet">Adatta alla finestra</button><button type="button" id="pan-tool" aria-pressed="false" title="Sposta il foglio trascinando. Puoi anche tenere premuta la barra spaziatrice.">Sposta foglio</button></div>
+        </div>
+        <div id="sheet-wrapper" tabindex="0" aria-label="Area del disegno. Usa lo zoom per ingrandire e Sposta foglio per navigare.">
+          <div id="sheet-stage" class="sheet-stage no-print">
           <article id="drawing-sheet" class="drawing-sheet">
             <div class="drawing-title">Schema unifilare di distribuzione elettrica</div>
             <svg id="diagram" viewBox="0 0 1200 780" aria-label="Schema unifilare"></svg>
             <footer class="title-block">
-              <div><small>Ditta esecutrice</small><strong id="block-company">ATS Srl</strong><span id="block-company-address">Via Vittorio Emanuele III<br />12036 Revello CN</span><span id="block-company-vat"></span></div>
+              <div><small>Ditta esecutrice</small><strong id="block-company">—</strong><span id="block-company-address"></span><span id="block-company-vat"></span></div>
               <div><small>Descrizione</small><strong id="block-type">Allestimento Luci</strong></div>
               <div><small>Evento</small><strong id="block-event">Nuovo progetto</strong></div>
               <div><small>Luogo</small><strong id="block-location">—</strong></div>
               <div><small>Versione</small><strong id="block-version">1.0</strong><small id="block-page">Pagina 1 di 1</small></div>
             </footer>
           </article>
-          <div id="print-pages" aria-hidden="true"></div>
+          </div>
+          <section id="empty-canvas" class="empty-canvas no-print" aria-label="Inizia lo schema" hidden>
+            <span class="eyebrow">Il tuo schema parte da qui</span><h1>Aggiungi il primo elemento</h1>
+            <p>Crea una fornitura, scegli un quadro oppure importa le utenze da Capture.</p>
+            <div><button type="button" class="button primary" data-start-action="supply">Aggiungi fornitura</button><button type="button" class="button" data-start-action="panel">Scegli quadro</button><button type="button" class="button" data-file-input="capture-file">Importa utenze</button></div>
+          </section>
+          <div id="print-pages" class="print-pages" aria-hidden="true"></div>
         </div>
       </section>
 
       <aside class="inspector no-print" id="inspector" hidden>
         <div class="inspector-heading"><h2 id="inspector-title">Proprietà</h2><div class="inspector-actions"><button id="delete-selected" title="Elimina elemento">Elimina</button><button type="button" id="close-inspector" aria-label="Chiudi proprietà" title="Chiudi">×</button></div></div>
-        <p class="empty-state">Seleziona un elemento dello schema.</p>
-        <form id="property-form" hidden></form>
+        <form id="property-form"></form>
       </aside>
     </main>
 
@@ -142,7 +166,7 @@
         <h2>Nuovo collegamento</h2>
         <label>Da<select id="link-from"></select></label>
         <label>A<select id="link-to"></select></label>
-        <label>Spina / linea<select id="link-cable"></select></label>
+        <label>Tipo di collegamento<select id="link-cable"></select></label>
         <label>Sezione cavo<select id="link-section"></select></label>
         <label>Lunghezza (m)<input id="link-length" type="number" min="0" step="0.5" value="2.5" /></label>
         <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-link" value="default">Crea</button></menu>
@@ -150,13 +174,23 @@
     </dialog>
     <dialog id="panel-dialog">
       <form method="dialog">
-        <h2>Scegli quadro dal database</h2>
-        <label>Tipo quadro<select id="panel-type"></select></label>
+        <h2>Scegli un quadro</h2>
+        <p class="help">Cerca per matricola, corrente o tipo di ingresso. Le prese indicano disponibilità e totale.</p>
+        <label>Cerca nella libreria<input id="panel-search" type="search" placeholder="Es. PB63A#6, 32 A, PowerLock" autocomplete="off" /></label>
+        <div class="catalog-filters"><label>Tipo quadro<select id="panel-type"></select></label><label>Ingresso<select id="panel-input-filter"></select></label></div>
+        <label class="inline-option"><input type="checkbox" id="panel-include-used" />Mostra anche i quadri già in uso</label>
+        <p id="panel-results-count" class="help" role="status"></p>
+        <div id="panel-results" class="panel-results"></div>
         <label>Matricola<select id="panel-choice"></select></label>
-        <label id="panel-mode-row" hidden>Uscite<select id="panel-mode"></select></label>
         <p class="help" id="panel-choice-details"></p>
         <menu><button value="cancel">Annulla</button><button class="button primary" id="confirm-panel" value="default">Aggiungi quadro</button></menu>
       </form>
+    </dialog>
+    <dialog id="issues-dialog">
+      <form method="dialog"><h2>Controlli del progetto</h2><p class="help">Gli errori bloccano salvataggio e stampa. Gli avvisi aiutano a completare lo schema.</p><div id="issues-list"></div><menu><button class="button primary" value="close">Chiudi</button></menu></form>
+    </dialog>
+    <dialog id="pages-dialog">
+      <form method="dialog"><h2>Pagine del progetto</h2><p class="help">Riconosci le pagine dal disegno, assegna un nome e apri quella che ti serve.</p><div id="page-cards" class="page-cards"></div><menu><button type="button" class="button" id="overview-add-page">Aggiungi pagina</button><button class="button primary" value="close">Chiudi</button></menu></form>
     </dialog>
     <dialog id="temporary-panel-dialog">
       <form method="dialog">
@@ -204,8 +238,14 @@
       <form method="dialog">
         <h2>Unifilari ATS</h2>
         <p class="help">Scegli come iniziare.</p>
+        <section id="autosave-recovery" class="autosave-recovery" hidden>
+          <strong>Progetto recuperabile</strong>
+          <p id="autosave-description" class="help"></p>
+          <button type="button" class="button primary" id="restore-autosave">Riprendi il lavoro</button>
+        </section>
         <div class="welcome-actions">
-          <label class="button primary">Carica progetto salvato<input id="welcome-open-project" type="file" accept="application/json,.json" hidden /></label>
+          <button type="button" class="button" data-file-input="welcome-open-project">Carica progetto salvato</button>
+          <input id="welcome-open-project" type="file" accept="application/json,.json" hidden />
           <button type="button" class="button" id="welcome-new-project">Nuovo progetto</button>
         </div>
       </form>
@@ -284,14 +324,18 @@
         <label>Versione<input id="project-version" value="1.0" required /></label>
         <fieldset class="project-company-fields">
           <legend>Ditta esecutrice</legend>
+          <label>Rubrica ditte<select id="company-book"><option value="">Compila una nuova ditta</option></select></label>
           <label>Denominazione<input id="project-company-name" /></label>
           <label>Indirizzo<textarea id="project-company-address" rows="3" placeholder="Via, numero civico&#10;CAP Città Provincia"></textarea></label>
           <label>P. IVA<input id="project-company-vat" /></label>
+          <div class="company-book-actions"><button type="button" class="button" id="save-company">Salva ditta in rubrica</button><button type="button" class="button" id="remove-company" disabled>Rimuovi dalla rubrica</button></div>
+          <p class="help" id="company-book-status" role="status">La rubrica viene conservata in questo browser.</p>
         </fieldset>
         <menu><button type="button" id="cancel-project">Annulla</button><button type="submit" class="button primary" id="confirm-project">Salva</button></menu>
       </form>
     </dialog>
-    <script src="core.js?v=20261105-1"></script>
-    <script src="app.js?v=20261105-1"></script>
+    <script src="core.js?v=20261111-3"></script>
+    <script src="viewport.js?v=20261111-3"></script>
+    <script src="app.js?v=20261111-3"></script>
   </body>
 </html>

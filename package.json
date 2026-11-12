@@ -5,7 +5,12 @@
   "description": "Editor statico per schemi unifilari di distribuzione elettrica",
   "scripts": {
     "test": "node tests/core.test.js",
-    "check": "node --check core.js && node --check app.js && node tests/core.test.js"
+    "check": "node --check core.js && node --check viewport.js && node --check app.js && node tests/core.test.js",
+    "test:browser": "playwright test",
+    "test:browser:install": "playwright install firefox webkit"
   },
-  "license": "GPL-3.0-only"
+  "license": "GPL-3.0-only",
+  "devDependencies": {
+    "@playwright/test": "1.65.0"
+  }
 }

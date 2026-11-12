@@ -1,3 +1,5 @@
+'use strict';
+
 const CABLES = [
   { id: 'cee16mono', name: 'CEE 16 A monofase', plug: 'CEE P+N+T 230 V 16 A', cable: 'H07RN-F 3G2,5 mm²' },
   { id: 'cee16tri', name: 'CEE 16 A trifase', plug: 'CEE 3P+N+T 400 V 16 A', cable: 'H07RN-F 5G2,5 mm²' },
@@ -22,7 +24,7 @@ const CABLE_SECTION_GROUPS = {
 };
 // Libreria standard derivata da Quadri.xlsx: viene gestita nel codice dell'app, non nell'interfaccia utente.
 const portList = (...items) => items.map(([type, quantity]) => ({ type, quantity }));
-const panelModels = (prefix, numbers, inputType, ports, alternatives = []) => numbers.map((number) => ({ matricola: `${prefix}#${number}`, inputType, ports, alternatives }));
+const panelModels = (prefix, numbers, inputType, ports) => numbers.map((number) => ({ matricola: `${prefix}#${number}`, inputType, ports }));
 const PANEL_LIBRARY = [
   ...panelModels('PB250A', [1], 'powerlock', portList(['cee16mono', 1], ['cee32tri', 1], ['cee63tri', 6])),
   ...panelModels('PB125A', [1], 'cee125tri', portList(['cee16mono', 3], ['cee32tri', 2], ['cee63tri', 3])),
@@ -44,12 +46,13 @@ const PANEL_LIBRARY = [
 const Core = window.UnifilariCore;
 if (!Core) throw new Error('Il modulo di dominio Unifilari non è disponibile.');
 const $ = (selector) => document.querySelector(selector);
-const uid = () => crypto.randomUUID();
+const uid = () => Core.createId();
 const NODE_HALF = 100;
 const AUTOSAVE_KEY = 'unifilari.autosave.v6';
+const COMPANY_BOOK_KEY = 'unifilari.companies.v1';
 const HISTORY_LIMIT = 80;
 const MAX_LOADS_PER_PAGE = 18;
-let state = { version: Core.SCHEMA_VERSION, meta: { name: '', location: '', locationStreet: '', locationPostcode: '', locationCity: '', locationProvince: '', type: 'Allestimento Luci', revision: '1.0', company: 'ATS Srl', companyAddress: 'Via Vittorio Emanuele III\n12036 Revello CN', companyVat: '' }, pages: [1], currentPage: 1, selected: null, selectedIds: [], selectedLink: null, library: PANEL_LIBRARY, nodes: [], links: [] };
+let state = { version: Core.SCHEMA_VERSION, meta: { name: '', location: '', locationStreet: '', locationPostcode: '', locationCity: '', locationProvince: '', type: 'Allestimento Luci', revision: '1.0', company: '', companyAddress: '', companyVat: '' }, pages: [1], currentPage: 1, selected: null, selectedIds: [], selectedLink: null, nodes: [], links: [] };
 let temporaryPorts = [{ type: 'cee16mono', quantity: 1 }];
 let editingTemporaryPanelId = null;
 let pendingLinkReferences = [];
@@ -63,12 +66,15 @@ let lastHistoryAt = 0;
 let dirty = false;
 let savedProjectSnapshot = null;
 let autosaveTimer = null;
+let recoverableAutosave = null;
 let renderFrame = null;
 let projectDialogMode = 'edit';
 let phaseSupplyFilter = '';
 let projectLocationResults = [];
 let projectLocationController = null;
 const projectLocationCache = new Map();
+let companyBook = [];
+let canvasViewport = null;
 
 function serializableProject() {
   return Core.serializeProject(state);
@@ -93,8 +99,8 @@ function dropNoopHistory() {
 function restoreHistorySnapshot(snapshot) {
   const saved = JSON.parse(snapshot);
   const normalized = Core.normalizeProject({ ...saved.project, currentPage: saved.currentPage });
-  state = { ...normalized, library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null };
-  syncMetaInputs();
+  state = { ...normalized, selected: null, selectedIds: [], selectedLink: null };
+  fillProjectForm(state.meta);
   render();
 }
 function undo() {
@@ -113,24 +119,42 @@ function redo() {
 }
 function updateDirtyUi() {
   const saveState = $('#save-state');
-  if (saveState) saveState.textContent = dirty ? 'Modifiche non salvate' : 'Salvato';
+  if (saveState) saveState.textContent = dirty ? 'Modifiche non salvate' : state.meta.name ? 'Salvato' : 'Nessuna modifica';
   if ($('#undo-action')) $('#undo-action').disabled = historyPast.length === 0;
   if ($('#redo-action')) $('#redo-action').disabled = historyFuture.length === 0;
 }
 function flushAutosave() {
   clearTimeout(autosaveTimer);
+  autosaveTimer = null;
   try {
     localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ savedAt: new Date().toISOString(), project: serializableProject() }));
   } catch {
-    showStatus('Salvataggio automatico non disponibile in questo browser.');
+    showStatus('Salvataggio automatico non disponibile in questo browser.', 'warning');
   }
+}
+function offerAutosaveRecovery() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(AUTOSAVE_KEY) || 'null');
+    if (!saved?.project) return;
+    const project = Core.normalizeProject(saved.project);
+    recoverableAutosave = project;
+    const date = new Date(saved.savedAt);
+    const when = Number.isFinite(date.getTime()) ? ` · ${date.toLocaleString('it-IT')}` : '';
+    $('#autosave-description').textContent = `${project.meta.name || 'Progetto senza nome'}${when}`;
+    $('#autosave-recovery').hidden = false;
+  } catch {
+    showStatus('Nessun autosalvataggio leggibile disponibile. Puoi aprire un file progetto.', 'warning');
+  }
+}
+function flushPendingAutosave() {
+  if (autosaveTimer !== null) flushAutosave();
 }
 function markChanged(message = '') {
   dirty = JSON.stringify(serializableProject()) !== savedProjectSnapshot;
   updateDirtyUi();
   clearTimeout(autosaveTimer);
   autosaveTimer = setTimeout(flushAutosave, 350);
-  if (message) showStatus(message);
+  if (message) showStatus(message, 'success');
 }
 function markSaved() {
   savedProjectSnapshot = JSON.stringify(serializableProject());
@@ -144,11 +168,118 @@ function resetHistory() {
   lastHistoryKey = '';
   updateDirtyUi();
 }
-function syncMetaInputs() {
-  fillProjectForm(state.meta);
-}
 function projectIssues() {
   return Core.validateProject(state, { cableName: (id) => cableById(id).name });
+}
+
+function pageLabel(page) { return state.pageNames?.[page] ? `Pagina ${page} · ${state.pageNames[page]}` : `Pagina ${page}`; }
+function goToPage(page) {
+  if (!sortedPages().includes(page)) return;
+  state.currentPage = page; state.selected = null; state.selectedIds = []; state.selectedLink = null;
+  render(); canvasViewport?.resetScroll();
+}
+function diagramSelectionElement() {
+  if (state.selected) return $(`#diagram .node[data-id="${state.selected}"]`);
+  const link = linkById(state.selectedLink), master = link?.socapexGroup ? socapexGroupLinks(link)[0] : link;
+  return master ? $(`#diagram > .link[data-link-id="${master.id}"]`) : null;
+}
+function renderWorkflowGuide() {
+  const nodes = pageNodes(), empty = !nodes.length;
+  $('#empty-canvas').hidden = !empty;
+  $('#sheet-wrapper').classList.toggle('is-empty', empty);
+  const guide = $('#workflow-guide');
+  let message = '', action = '', label = '';
+  if (!empty && !nodes.some((node) => node.type === 'panel')) {
+    message = 'Scegli un quadro per distribuire l’alimentazione.'; action = 'panel'; label = 'Scegli quadro';
+  } else if (!empty && !nodes.some((node) => node.type === 'supply') && !state.links.some((link) => nodes.some((node) => node.id === link.to))) {
+    message = 'Aggiungi una fornitura per alimentare il quadro.'; action = 'supply'; label = 'Aggiungi fornitura';
+  } else if (!empty && !state.links.some((link) => !isReferenceLink(link) && nodes.some((node) => node.id === link.from))) {
+    message = 'Collega la fornitura al quadro: ti mostreremo le destinazioni compatibili.'; action = 'link'; label = 'Crea collegamento';
+  } else if (!empty && !nodes.some((node) => node.type === 'load')) {
+    message = 'Ora puoi aggiungere le utenze o importarle da Capture.'; action = 'loads'; label = 'Aggiungi utenze';
+  }
+  guide.hidden = !message;
+  guide.innerHTML = message ? `<span>${esc(message)}</span><button type="button" class="button" data-start-action="${action}">${label}</button>` : '';
+}
+function runStartAction(action) {
+  closeMobileSidebar();
+  if (action === 'supply') addNode('supply');
+  if (action === 'panel') openPanelDialog();
+  if (action === 'link') showLinkDialog();
+  if (action === 'loads') openBulkLoadDialog();
+}
+function renderSelectionToolbar() {
+  const nodes = selectedNodes().filter((node) => node.page === state.currentPage), bar = $('#selection-toolbar');
+  bar.hidden = nodes.length < 2;
+  if (bar.hidden) { bar.replaceChildren(); return; }
+  const loads = nodes.filter((node) => node.type === 'load'), available = loads.some((node) => !state.links.some((link) => !isReferenceLink(link) && link.to === node.id));
+  const hasPanel = pageNodes().some((node) => node.type === 'panel');
+  const actions = [
+    { id: 'connect', label: 'Collega', reason: !loads.length ? 'Seleziona almeno un’utenza.' : !available ? 'Le utenze selezionate sono già collegate.' : !hasPanel ? 'Aggiungi prima un quadro.' : '' },
+    { id: 'arrange', label: 'Ordina', reason: '' },
+    { id: 'align', label: 'Allinea', reason: '' },
+    { id: 'duplicate', label: loads.length ? `Duplica ${loads.length} utenz${loads.length === 1 ? 'a' : 'e'}` : 'Duplica', reason: !loads.length ? 'La duplicazione è disponibile per le utenze.' : '' },
+    { id: 'delete', label: 'Elimina', reason: '' },
+  ];
+  bar.innerHTML = `<strong>${nodes.length} elementi selezionati</strong><div class="selection-actions">${actions.map((action) => `<div><button type="button" class="button ${action.id === 'delete' ? 'danger' : ''}" data-selection-action="${action.id}" ${action.reason ? `disabled aria-describedby="selection-reason-${action.id}"` : ''}>${action.label}</button>${action.reason ? `<small id="selection-reason-${action.id}">${action.reason}</small>` : ''}</div>`).join('')}</div>`;
+}
+function editorIssues() {
+  const errors = projectIssues().map((issue) => {
+    const link = linkById(issue.linkId);
+    return { ...issue, kind: 'error', nodeId: issue.nodeId || (['missing-socket', 'invalid-socket'].includes(issue.code) ? link?.to : null) };
+  });
+  return [...errors, ...Core.unconnectedLoadIds(state).map((id) => ({ kind: 'warning', code: 'unconnected-load', nodeId: id, message: `${nodeById(id).title}: utenza non collegata, esclusa dal calcolo delle fasi.` }))];
+}
+function renderDiagnostics() {
+  const issues = editorIssues(), errors = issues.filter((issue) => issue.kind === 'error').length;
+  $('#issues-count').textContent = issues.length;
+  $('#show-issues').dataset.kind = errors ? 'error' : issues.length ? 'warning' : 'success';
+  $('#show-issues').setAttribute('aria-label', issues.length ? `Controlli: ${errors} errori e ${issues.length - errors} avvisi` : 'Controlli: nessuna anomalia');
+  if (!$('#issues-dialog').open) return;
+  $('#issues-list').innerHTML = issues.length ? issues.map((issue, index) => {
+    const link = linkById(issue.linkId), node = nodeById(issue.nodeId) || (link && nodeById(link.from));
+    return `<article class="issue-card" data-kind="${issue.kind}"><div><strong>${issue.kind === 'error' ? 'Errore' : 'Avviso'}${node ? ` · ${esc(pageLabel(node.page))}` : ''}</strong><p>${esc(issue.message)}</p></div>${node || link ? `<button type="button" class="button" data-issue-index="${index}">Vai all’elemento</button>` : ''}</article>`;
+  }).join('') : '<div class="checks-empty"><strong>Nessuna anomalia</strong><p>Collegamenti e prese del progetto sono coerenti e tutte le utenze sono collegate.</p></div>';
+}
+function goToIssue(index) {
+  const issue = editorIssues()[index];
+  if (!issue) return;
+  const link = linkById(issue.linkId), node = nodeById(issue.nodeId) || (link && nodeById(link.from));
+  if (!node) return;
+  $('#issues-dialog').close();
+  state.currentPage = node.page;
+  if (issue.nodeId) selectNode(node.id);
+  else { state.selectedLink = link.id; state.selected = null; state.selectedIds = []; }
+  render();
+  const element = diagramSelectionElement();
+  canvasViewport?.reveal(element); element?.focus({ preventScroll: true });
+  showStatus(issue.message, issue.kind);
+}
+function pageThumbnail(page) {
+  const nodes = state.nodes.filter((node) => node.page === page), byId = new Map(nodes.map((node) => [node.id, node]));
+  const paths = state.links.filter((link) => byId.has(link.from) && byId.has(link.to)).map((link) => {
+    const from = byId.get(link.from), to = byId.get(link.to), middle = (from.x + to.x) / 2;
+    return `<path d="M${from.x + NODE_HALF},${from.y} H${middle} V${to.y} H${to.x - NODE_HALF}"/>`;
+  }).join('');
+  return `<svg viewBox="0 0 1200 780" aria-hidden="true" class="page-thumbnail">${paths}${nodes.map((node) => `<rect class="thumbnail-${node.type}" x="${node.x - NODE_HALF}" y="${node.y - nodeDisplayHeight(node) / 2}" width="${NODE_HALF * 2}" height="${nodeDisplayHeight(node)}" rx="8"/>`).join('')}</svg>`;
+}
+function renderPageOverview() {
+  if (!$('#pages-dialog').open) return;
+  $('#page-cards').innerHTML = sortedPages().map((page) => {
+    const nodes = state.nodes.filter((node) => node.page === page), loads = nodes.filter((node) => node.type === 'load').length;
+    return `<article class="page-card ${page === state.currentPage ? 'current' : ''}"><button type="button" class="page-preview-button" data-open-page="${page}" aria-label="Apri ${esc(pageLabel(page))}">${pageThumbnail(page)}<strong>${esc(pageLabel(page))}</strong><span>${loads} utenze · ${nodes.length} elementi</span></button><label>Nome pagina ${page}<input data-page-name="${page}" value="${esc(state.pageNames?.[page] || '')}" placeholder="Es. Palco, Regia, Esterni" maxlength="80" /></label></article>`;
+  }).join('');
+}
+function renamePage(page, value) {
+  const name = value.trim().slice(0, 80);
+  if ((state.pageNames?.[page] || '') === name) return;
+  checkpoint(`rename-page-${page}`);
+  state.pageNames ||= {};
+  if (name) state.pageNames[page] = name; else delete state.pageNames[page];
+  markChanged('Nome pagina aggiornato.'); render();
+}
+function closeMobileSidebar() {
+  if (window.matchMedia('(max-width: 760px)').matches) togglePanel($('.sidebar'), $('#toggle-sidebar'), false);
 }
 
 function nodeById(id) { return state.nodes.find((node) => node.id === id); }
@@ -194,9 +325,13 @@ function cableShortLabel(cable) { return cable.name.replace(/ monofase| trifase/
 function linkLabel(link) {
   const cable = cableById(link.cable);
   const section = cableById(link.cableSection || link.cable);
-  if (isPowerLock(cable.id)) return ['Cavo singolo polo PowerLock', section.cable, `Lunghezza linea ${link.length || 0} metri`];
-  if (cable.id === 'socapex') return [`Cavo ${section.cable}`, `Lunghezza linea ${link.length || 0} metri`];
-  return [cableShortLabel(cable), `Cavo ${section.cable}`, `Lunghezza linea ${link.length || 0} metri`];
+  const lines = isPowerLock(cable.id) ? ['Cavo singolo polo PowerLock'] : [cableShortLabel(cable)];
+  if (!link.hideCableSection) lines.push(isPowerLock(cable.id) ? section.cable : `Cavo ${section.cable}`);
+  if (!link.hideLength) lines.push(`Lunghezza linea ${link.length || 0} metri`);
+  return lines;
+}
+function linkDisplayOptions(link, disabled = false) {
+  return `<fieldset class="link-display-options"><legend>Testo nello schema e nel PDF</legend><label class="inline-option"><input type="checkbox" name="hideCableSection" ${link.hideCableSection ? '' : 'checked'} ${disabled ? 'disabled' : ''}/>Mostra sezione cavo</label><label class="inline-option"><input type="checkbox" name="hideLength" ${link.hideLength ? '' : 'checked'} ${disabled ? 'disabled' : ''}/>Mostra lunghezza</label></fieldset>`;
 }
 function linkLabelPosition(link, from, to) {
   const startX = from.x + NODE_HALF, endX = to.x - NODE_HALF, midX = Math.round((startX + endX) / 2), lines = linkLabel(link).flatMap((line) => wrapText(line, 29));
@@ -276,20 +411,23 @@ function cableSectionOptions(connectorId, selected) {
 }
 function nodeOptions(selected) { return pageNodes().map((node) => `<option value="${node.id}" ${node.id === selected ? 'selected' : ''}>${esc(node.title)}${node.socket ? ` (${node.socket})` : ''}</option>`).join(''); }
 function cableOptions(selected) { return cableOptionMarkup(LINE_CABLES, selected); }
+function linkCableOptions(link) {
+  const target = nodeById(link.to), required = requiredPlug(target);
+  const choices = CABLES.filter((cable) => (cable.id === link.cable || !cable.internal) && compatibleConnector(cable.id, required));
+  return cableOptionMarkup(choices.some((cable) => cable.id === link.cable) ? choices : [cableById(link.cable), ...choices], link.cable);
+}
 function plugOptions(selected) { return cableOptionMarkup(LOAD_PLUGS, selected); }
-function supplyOptions(selected) { return cableOptionMarkup(LINE_CABLES, selected); }
 function panelPortOptions(selected) { return cableOptionMarkup(PANEL_PORTS, selected); }
 function isPowerLock(id) { return Core.isPowerLock(id); }
 function compatibleConnector(first, second) { return Core.compatibleConnector(first, second); }
 function connectorCanFeedInput(first, second) { return Core.connectorCanFeedInput(first, second); }
 function requiredPlug(node) { return Core.requiredPlug(node); }
-function panelSockets(panel) { return Core.panelSockets(panel); }
 function availablePanelSockets(panel, target, ignoredLink = null) { return Core.availablePanelSockets(state, panel, target, ignoredLink); }
 function socketWarning(panel, target, socket, ignoredLink = null) { return Core.socketWarning(state, panel, target, socket, ignoredLink, (id) => cableById(id).name); }
 function assignFirstFreeSocket(from, to) {
   if (from.type !== 'panel') return true;
   const socket = availablePanelSockets(from, to)[0];
-  if (!socket) { showStatus(`Collegamento bloccato: non ci sono prese ${cableById(requiredPlug(to)).name} libere sul quadro ${from.title}.`); return false; }
+  if (!socket) { showStatus(`Collegamento bloccato: non ci sono prese ${cableById(requiredPlug(to)).name} libere sul quadro ${from.title}.`, 'error'); return false; }
   to.socket = socket.name; return true;
 }
 function isPanelMatricolaUsed(matricola) { return state.nodes.some((node) => node.type === 'panel' && node.panelModel === matricola); }
@@ -300,8 +438,10 @@ function compatibilityWarning(from, to, ignoredLink = null, cable = null) {
   const result = Core.validateConnection(state, candidate, { ignoredLinkId: ignoredLink, cableName: (id) => cableById(id).name });
   return result.ok ? '' : `Collegamento bloccato: ${result.message}`;
 }
-function showStatus(message = '') {
-  $('#status-message').textContent = message;
+function showStatus(message = '', kind = 'info') {
+  const banner = $('#status-message');
+  banner.textContent = message; banner.hidden = !message; banner.dataset.kind = kind;
+  banner.setAttribute('role', kind === 'error' ? 'alert' : 'status');
   const dialog = document.querySelector('dialog[open]');
   if (!dialog) return;
   let status = dialog.querySelector('.dialog-status');
@@ -312,7 +452,7 @@ function showStatus(message = '') {
     if (menu) menu.before(status);
     else (form || dialog).append(status);
   }
-  if (status) { status.textContent = message; status.hidden = !message; }
+  if (status) { status.textContent = message; status.hidden = !message; status.dataset.kind = kind; status.setAttribute('role', kind === 'error' ? 'alert' : 'status'); }
 }
 function physicalIncomingLink(panel) { return state.links.find((link) => !isReferenceLink(link) && panelKey(nodeById(link.to)) === panelKey(panel)); }
 function supplyRootKey(node, visited = new Set()) {
@@ -331,7 +471,7 @@ function updatePanelNumbering(from, target) {
 function tryAddLink(fromId, toId, cable, length, recordHistory = true, recordChange = true, cableSection = null) {
   const from = nodeById(fromId), to = nodeById(toId); if (!from || !to || fromId === toId) return false;
   const lineCable = cable || requiredPlug(to) || 'cee16mono';
-  const warning = compatibilityWarning(from, to, null, lineCable); if (warning) { showStatus(warning); return false; }
+  const warning = compatibilityWarning(from, to, null, lineCable); if (warning) { showStatus(warning, 'error'); return false; }
   if (recordHistory) checkpoint('add-link');
   if (!assignFirstFreeSocket(from, to)) { if (recordHistory) dropNoopHistory(); return false; }
   state.links.push({ id: uid(), from: fromId, to: toId, cable: lineCable, cableSection: cableSection || requiredPlug(to) || lineCable, length: Number.isFinite(Number(length)) ? Math.max(0, Number(length)) : 20 });
@@ -398,6 +538,8 @@ function render() {
   state.selectedIds = state.selectedIds.filter((id) => nodeIndex.has(id));
   if (state.selected && !state.selectedIds.includes(state.selected)) state.selected = state.selectedIds.at(-1) || null;
   const svg = $('#diagram'); const nodes = pageNodes(); const ids = new Set(nodes.map((node) => node.id));
+  const focused = svg.contains(document.activeElement) ? document.activeElement.closest('.node, .link') : null;
+  const focusSelector = focused?.dataset.id ? `[data-id="${focused.dataset.id}"]` : focused?.dataset.linkId ? `.link[data-link-id="${focused.dataset.linkId}"]` : null;
   const selectedIds = new Set(state.selectedIds), socapexGroups = new Map(), outgoingDirect = new Map();
   state.links.forEach((link) => {
     if (link.socapexGroup) {
@@ -424,23 +566,24 @@ function render() {
       if (!from || !ids.has(from.id) || !visibleTargets.length) return;
       const startX = from.x + NODE_HALF, endX = Math.min(...visibleTargets.map(({ node }) => node.x - NODE_HALF)), busX = Math.round((startX + endX) / 2), ys = visibleTargets.map(({ node }) => node.y), master = group[0], label = linkLabelPosition(master, from, visibleTargets[0].node);
       const labelMarkup = `<g class="link-label" data-link-id="${master.id}"><rect class="label-hit" x="${label.x - 5}" y="${label.y - 17}" width="310" height="${label.lines.length * 19 + 10}"/>${label.lines.map((line, index) => `<text class="line-label" x="${label.x}" y="${label.y + index * 19}">${esc(line)}</text>`).join('')}</g>`;
-      markup += `<g class="link ${group.some((item) => item.id === state.selectedLink) ? 'selected' : ''}" data-link-id="${master.id}" tabindex="0" role="button" aria-label="Collegamento Socapex da ${esc(from.title)}"><path class="socapex-bus" d="M${startX},${from.y} H${busX} V${Math.min(...ys)} M${busX},${Math.min(...ys)} V${Math.max(...ys)}"/>${visibleTargets.map(({ node }) => `<path class="connector" d="M${busX},${node.y} H${node.x - NODE_HALF}"/>`).join('')}${labelMarkup}</g>`;
+      markup += `<g class="link ${group.some((item) => item.id === state.selectedLink) ? 'selected' : ''}" data-link-id="${master.id}" tabindex="0" role="button" aria-label="Collegamento Socapex da ${esc(from.title)}"><path class="socapex-bus" d="M${startX},${from.y} H${busX} V${Math.min(...ys)} M${busX},${Math.min(...ys)} V${Math.max(...ys)}"/>${visibleTargets.map(({ node }) => `<path class="connector" marker-end="url(#arrow)" d="M${busX},${node.y} H${node.x - NODE_HALF}"/>`).join('')}${labelMarkup}</g>`;
       return;
     }
     const from = nodeIndex.get(link.from), to = nodeIndex.get(link.to); if (!from || !to || !ids.has(from.id)) return;
-    if (!ids.has(to.id)) { const pageNumber = printPageNumbers?.get(to.page) ?? to.page; markup += `<g class="link" data-link-id="${link.id}"><path class="connector" d="M${from.x + NODE_HALF},${from.y} H1050"/><rect class="page-jump" x="1060" y="${from.y - 22}" width="105" height="44"/><text class="page-jump-text" x="1112" y="${from.y + 5}">Pagina ${pageNumber}</text></g>`; return; }
+    if (!ids.has(to.id)) { const pageNumber = printPageNumbers?.get(to.page) ?? to.page; markup += `<g class="link" data-link-id="${link.id}"><path class="connector" marker-end="url(#arrow)" d="M${from.x + NODE_HALF},${from.y} H1050"/><rect class="page-jump" x="1060" y="${from.y - 22}" width="105" height="44"/><text class="page-jump-text" x="1112" y="${from.y + 5}">Pagina ${pageNumber}</text></g>`; return; }
     const points = linkRoutePoints(link, from, to, nodeIndex, outgoingDirect.get(from.id) || [link]), path = routePath(points), label = linkLabelPosition(link, from, to);
     const labelMarkup = `<g class="link-label" data-link-id="${link.id}"><rect class="label-hit" x="${label.x - 5}" y="${label.y - 17}" width="310" height="${label.lines.length * 19 + 10}"/>${label.lines.map((line, index) => `<text class="line-label" x="${label.x}" y="${label.y + index * 19}">${esc(line)}</text>`).join('')}</g>`;
-    markup += `<g class="link ${state.selectedLink === link.id ? 'selected' : ''}" data-link-id="${link.id}" tabindex="0" role="button" aria-label="Collegamento da ${esc(from.title)} a ${esc(to.title)}"><path class="connector-hit" d="${path}"/><path class="connector" d="${path}"/>${routeHandlesMarkup(link, points)}${labelMarkup}</g>`;
+    markup += `<g class="link ${state.selectedLink === link.id ? 'selected' : ''}" data-link-id="${link.id}" tabindex="0" role="button" aria-label="Collegamento da ${esc(from.title)} a ${esc(to.title)}"><path class="connector-hit" d="${path}"/><path class="connector" marker-end="url(#arrow)" d="${path}"/>${routeHandlesMarkup(link, points)}${labelMarkup}</g>`;
   });
   nodes.forEach((node) => {
     const lines = textLines(node), compact = node.type === 'load', lineHeight = compact ? 14 : 20, topPadding = compact ? 14 : 21, height = nodeDisplayHeight(node);
-    const texts = lines.map((line, index) => `<text class="${index === 0 || (node.type === 'panel' && index === 2) ? 'node-title' : ''}" x="${node.x}" y="${node.y - height / 2 + topPadding + index * lineHeight}">${esc(line)}</text>`).join('');
+    const texts = lines.map((line, index) => `<text class="${index === 0 || (node.type === 'panel' && line === node.details) ? 'node-title' : ''}" x="${node.x}" y="${node.y - height / 2 + topPadding + index * lineHeight}">${esc(line)}</text>`).join('');
     markup += `<g class="node ${node.type} ${selectedIds.has(node.id) ? 'selected' : ''}" data-id="${node.id}" tabindex="0" role="button" aria-label="${esc(node.title)}"><rect x="${node.x - NODE_HALF}" y="${node.y - height / 2}" width="${NODE_HALF * 2}" height="${height}"/>${texts}<circle class="link-handle" data-source="${node.id}" cx="${node.x + NODE_HALF}" cy="${node.y}" r="7" aria-hidden="true"/></g>`;
   });
   svg.innerHTML = markup;
-  $('#page-label').textContent = `Pagina ${state.currentPage}`; $('#page-summary').textContent = `${nodes.length} elementi`;
-  $('#page-select').innerHTML = pages.map((page) => `<option value="${page}" ${page === state.currentPage ? 'selected' : ''}>Pagina ${page}</option>`).join('');
+  if (focusSelector) svg.querySelector(focusSelector)?.focus({ preventScroll: true });
+  $('#page-label').textContent = pageLabel(state.currentPage); $('#page-summary').textContent = `${nodes.length} elementi`;
+  $('#page-select').innerHTML = pages.map((page) => `<option value="${page}" ${page === state.currentPage ? 'selected' : ''}>${esc(pageLabel(page))}</option>`).join('');
   const pageIndex = pages.indexOf(state.currentPage);
   $('#previous-page').disabled = pageIndex <= 0;
   $('#next-page').disabled = pageIndex < 0 || pageIndex >= pages.length - 1;
@@ -448,6 +591,11 @@ function render() {
   $('#block-event').textContent = state.meta.name || '—'; $('#block-location').textContent = state.meta.location || '—'; $('#block-type').textContent = state.meta.type || '—'; $('#block-version').textContent = state.meta.revision || '1.0'; $('#block-company').textContent = state.meta.company || '—'; $('#block-company-address').textContent = state.meta.companyAddress || '—'; $('#block-company-vat').textContent = state.meta.companyVat ? `P. IVA ${state.meta.companyVat}` : ''; $('#block-page').textContent = `Pagina ${state.currentPage} di ${maxPages}`; $('#project-name').textContent = state.meta.name || 'Nuovo progetto';
   renderPhaseSummary();
   renderInspector();
+  renderWorkflowGuide();
+  renderSelectionToolbar();
+  renderDiagnostics();
+  renderPageOverview();
+  canvasViewport?.refresh();
   updateDirtyUi();
 }
 function requestRender() {
@@ -456,8 +604,10 @@ function requestRender() {
 }
 function renderInspector() {
   const inspector = $('#inspector'), form = $('#property-form'), node = nodeById(state.selected), link = linkById(state.selectedLink);
-  const selected = node || link; inspector.hidden = !selected; $('.empty-state').hidden = !!selected; form.hidden = !selected; $('#delete-selected').hidden = !selected;
-  if (!selected) return;
+  const selected = node || link;
+  inspector.hidden = !selected;
+  $('.app-shell').classList.toggle('has-inspector', Boolean(selected));
+  if (!selected) { form.replaceChildren(); return; }
   $('#inspector-title').textContent = link ? (link.socapexGroup ? 'Collegamento Socapex' : 'Collegamento') : state.selectedIds.length > 1 ? `${state.selectedIds.length} elementi` : node.title || 'Proprietà';
   if (link) {
     const from = nodeById(link.from), to = nodeById(link.to), reference = isReferenceLink(link);
@@ -468,28 +618,28 @@ function renderInspector() {
         const sockets = from?.type === 'panel' && target ? availablePanelSockets(from, target, member.id) : [];
         return `<label>${esc(target?.title || 'Utenza')}<select name="socapexSocket:${member.id}" ${reference || !sockets.length ? 'disabled' : ''}>${sockets.length ? sockets.map((socket) => `<option value="${socket.name}" ${socket.name === target?.socket ? 'selected' : ''}>${socket.name} · ${cableById(socket.type).name}</option>`).join('') : '<option value="">Nessuna presa compatibile libera</option>'}</select></label>`;
       }).join('');
-      form.innerHTML = `${reference ? '<div class="read-only">Collegamento Socapex richiamato: le prese si modificano sul collegamento originale.</div>' : ''}<label>Da<div class="read-only">${esc(from?.title || '—')}</div></label><label>Linea<div class="read-only">Socapex · ${group.length} utenz${group.length === 1 ? 'a' : 'e'}</div></label><label>Lunghezza (m)<input name="socapexLength" type="number" min="0" step="0.5" value="${link.length}" ${reference ? 'disabled' : ''}/></label><fieldset class="socapex-socket-editor"><legend>Prese del quadro</legend>${socketRows}</fieldset><span class="field-help">Ogni menu mostra soltanto le prese CEE 16 A monofase compatibili e libere.</span>`;
+      form.innerHTML = `${reference ? '<div class="read-only">Collegamento Socapex richiamato: le prese si modificano sul collegamento originale.</div>' : ''}<label>Da<div class="read-only">${esc(from?.title || '—')}</div></label><label>Linea<div class="read-only">Socapex · ${group.length} utenz${group.length === 1 ? 'a' : 'e'}</div></label><label>Lunghezza (m)<input name="socapexLength" type="number" min="0" step="0.5" value="${link.length}" ${reference ? 'disabled' : ''}/></label>${linkDisplayOptions(link)}<fieldset class="socapex-socket-editor"><legend>Prese del quadro</legend>${socketRows}${reference ? '' : '<button type="button" class="button" id="reassign-socapex-sockets">Riassegna prese al banco libero</button>'}</fieldset><span class="field-help">Ogni menu mostra soltanto le prese CEE 16 A monofase compatibili e libere.</span>`;
       return;
     }
     const routeEditor = !link.socapexGroup && from && to && from.page === to.page
       ? `<div class="route-editor"><strong>Percorso linea</strong><span>Trascina le maniglie blu sui tratti della linea per cambiarne il giro.</span><div><button type="button" class="button" id="add-link-detour">Aggiungi deviazione</button><button type="button" class="button" id="reset-link-route" ${link.routePoints ? '' : 'disabled'}>Percorso automatico</button></div></div>`
       : '';
-    form.innerHTML = `${reference ? `<div class="read-only">Collegamento richiamato: non impegna ulteriormente prese o ingressi.</div><label>Da<div class="read-only">${esc(from?.title || '—')}</div></label><label>A<div class="read-only">${esc(to?.title || '—')}</div></label>` : `<label>Da<select name="from">${nodeOptions(link.from)}</select></label><label>A<select name="to">${nodeOptions(link.to)}</select></label>`}<label>Spina / linea<select name="cable">${cableOptions(link.cable)}</select></label><label>Sezione cavo<select name="cableSection">${cableSectionOptions(link.cable, link.cableSection || link.cable)}</select></label><label>Lunghezza (m)<input name="length" type="number" min="0" step="0.5" value="${link.length}" /></label>${routeEditor}<span class="field-help">La sezione del cavo può essere modificata senza cambiare la spina. Puoi spostare la descrizione trascinandola.</span>`;
+    form.innerHTML = `${reference ? `<div class="read-only">Collegamento richiamato: non impegna ulteriormente prese o ingressi.</div><label>Da<div class="read-only">${esc(from?.title || '—')}</div></label><label>A<div class="read-only">${esc(to?.title || '—')}</div></label>` : `<label>Da<select name="from">${nodeOptions(link.from)}</select></label><label>A<select name="to">${nodeOptions(link.to)}</select></label>`}<label>Tipo di collegamento<select name="cable">${linkCableOptions(link)}</select></label><label>Sezione cavo<select name="cableSection">${cableSectionOptions(link.cable, link.cableSection || link.cable)}</select></label><label>Lunghezza (m)<input name="length" type="number" min="0" step="0.5" value="${link.length}" /></label>${linkDisplayOptions(link)}${routeEditor}<span class="field-help">La sezione del cavo può essere modificata senza cambiare la spina. Puoi spostare la descrizione trascinandola.</span>`;
     return;
   }
   const hasIncoming = state.links.some((item) => item.to === node.id);
   const incoming = state.links.find((item) => item.to === node.id), source = incoming && nodeById(incoming.from);
-  const connectorControl = node.type === 'load' ? `<label>Spina utenza<select name="plugType">${plugOptions(node.plugType)}</select></label>` : node.type === 'supply' ? `<label>Fornitura<select name="supplyType">${supplyOptions(node.supplyType || 'cee125tri')}</select></label>` : '';
-  const sockets = source?.type === 'panel' ? availablePanelSockets(source, node, incoming.id) : [], socketControl = node.type === 'supply' ? '' : source?.type === 'panel' ? `<label>Presa disponibile<select name="socket" ${sockets.length ? '' : 'disabled'}>${sockets.length ? sockets.map((item) => `<option value="${item.name}" ${item.name === node.socket ? 'selected' : ''}>${item.name} · ${cableById(item.type).name}</option>`).join('') : '<option value="">Nessuna presa compatibile libera</option>'}</select></label><label>Oppure scrivi presa<input name="manualSocket" list="socket-list-${node.id}" value="${esc(node.socket || '')}" placeholder="Es. P1" /><datalist id="socket-list-${node.id}">${sockets.map((item) => `<option value="${item.name}">${cableById(item.type).name}</option>`).join('')}</datalist></label>` : `<label>Presa<input name="socket" value="${esc(node.socket || '')}" placeholder="Es. P1" /></label>`;
+  const connectorControl = node.type === 'load' ? `<label>Spina utenza<select name="plugType">${plugOptions(node.plugType)}</select></label>` : node.type === 'supply' ? `<label>Fornitura<select name="supplyType">${cableOptions(node.supplyType || 'cee125tri')}</select></label>` : '';
+  const sockets = source?.type === 'panel' ? availablePanelSockets(source, node, incoming.id) : [], socketControl = node.type === 'supply' ? '' : source?.type === 'panel' ? `<label>Presa disponibile<select name="socket" ${sockets.length ? '' : 'disabled'}>${!node.socket && sockets.length ? '<option value="" selected disabled>Seleziona una presa</option>' : ''}${sockets.length ? sockets.map((item) => `<option value="${item.name}" ${item.name === node.socket ? 'selected' : ''}>${item.name} · ${cableById(item.type).name}</option>`).join('') : '<option value="">Nessuna presa compatibile libera</option>'}</select></label><label>Oppure scrivi presa<input name="manualSocket" list="socket-list-${node.id}" value="${esc(node.socket || '')}" placeholder="Es. P1" /><datalist id="socket-list-${node.id}">${sockets.map((item) => `<option value="${item.name}">${cableById(item.type).name}</option>`).join('')}</datalist></label>` : `<label>Presa<input name="socket" value="${esc(node.socket || '')}" placeholder="Es. P1" /></label>`;
   const sharedSupply = node.type === 'supply' && supplyGroup(node).length > 1 ? `<div class="read-only">Fornitura condivisa su ${supplyGroup(node).length} pagine: nome, tipo e dettaglio vengono mantenuti uguali.</div>` : '';
   const sharedPanel = node.type === 'panel' && panelGroup(node).length > 1 ? `<div class="read-only">Quadro condiviso su ${panelGroup(node).length} pagine: uscite, nome e matricola sono condivisi.</div>` : '';
   const temporaryEdit = node.type === 'panel' && node.panelModel === 'Temporaneo' ? '<button type="button" class="button" id="edit-temporary-panel">Modifica configurazione quadro temporaneo</button>' : '';
   const duplicateLoad = node.type === 'load' ? '<button type="button" class="button" id="duplicate-load">Duplica utenza</button>' : '';
-  const pageOptions = sortedPages().map((page) => `<option value="${page}" ${page === node.page ? 'selected' : ''}>Pagina ${page}</option>`).join('');
+  const pageOptions = sortedPages().map((page) => `<option value="${page}" ${page === node.page ? 'selected' : ''}>${esc(pageLabel(page))}</option>`).join('');
   const detailControl = node.type === 'load'
     ? `<label>Assorbimento (W)<input name="watts" type="number" min="0" step="1" value="${esc(node.watts || 0)}" /></label><label>Nota<input name="note" value="${esc(node.note || '')}" /></label>`
     : `<label>Dettaglio / matricola<input name="details" value="${esc(node.details || '')}" /></label>`;
-  form.innerHTML = `${state.selectedIds.length > 1 ? `<div class="read-only">${state.selectedIds.length} elementi selezionati. Trascina uno dei blocchi per spostarli insieme.</div>` : ''}<label>Tipo<div class="read-only">${node.type === 'supply' ? 'Fornitura' : node.type === 'panel' ? 'Quadro' : 'Utenza'}</div></label>${sharedSupply}${sharedPanel}${node.type === 'panel' && node.panelModel ? `<label>Modello database<div class="read-only">${esc(node.panelModel)}</div></label>` : ''}${temporaryEdit}${duplicateLoad}<label>Pagina<select name="page">${pageOptions}</select></label><label>Titolo<input name="title" value="${esc(node.title)}" /></label>${connectorControl}${node.type === 'panel' ? '<label>Sottotitolo<input name="subtitle" value="' + esc(node.subtitle) + '" /></label>' : ''}${socketControl}${detailControl}${hasIncoming ? '<button type="button" class="button" id="unlink-selected">Scollega dal quadro / fornitura</button>' : ''}<span class="field-help">⇧/⌘ + clic per aggiungere o togliere un blocco dalla selezione. Trascina un blocco selezionato per spostarli insieme.</span>`;
+  form.innerHTML = `${state.selectedIds.length > 1 ? `<div class="read-only">${state.selectedIds.length} elementi selezionati. Trascina uno dei blocchi per spostarli insieme.</div>` : ''}<label>Tipo<div class="read-only">${node.type === 'supply' ? 'Fornitura' : node.type === 'panel' ? 'Quadro' : 'Utenza'}</div></label>${sharedSupply}${sharedPanel}${node.type === 'panel' ? panelSocketSummaryMarkup(node) : ''}${node.type === 'panel' && node.panelModel ? `<label>Modello database<div class="read-only">${esc(node.panelModel)}</div></label>` : ''}${temporaryEdit}${duplicateLoad}<label>Pagina<select name="page">${pageOptions}</select></label><label>Titolo<input name="title" value="${esc(node.title)}" /></label>${connectorControl}${node.type === 'panel' ? '<label>Sottotitolo<input name="subtitle" value="' + esc(node.subtitle) + '" /></label>' : ''}${socketControl}${detailControl}${hasIncoming ? '<button type="button" class="button" id="unlink-selected">Scollega dal quadro / fornitura</button>' : ''}<span class="field-help">⇧/⌘ + clic per aggiungere o togliere un blocco dalla selezione. Trascina un blocco selezionato per spostarli insieme.</span>`;
 }
 function addNode(type) {
   checkpoint(`add-${type}`);
@@ -503,7 +653,7 @@ function addNode(type) {
 }
 function openSupplyReferenceDialog() {
   const supplies = uniqueSupplies().filter((supply) => !pageNodes().some((node) => node.type === 'supply' && supplyKey(node) === supplyKey(supply)));
-  if (!supplies.length) return showStatus('Non ci sono forniture da richiamare in questa pagina.');
+  if (!supplies.length) return showStatus('Non ci sono forniture da richiamare in questa pagina.', 'warning');
   $('#supply-reference-choice').innerHTML = supplies.map((supply) => `<option value="${supplyKey(supply)}">${esc(supply.title)} - ${esc(cableById(supply.supplyType).name)}</option>`).join('');
   $('#supply-reference-dialog').showModal();
 }
@@ -528,17 +678,11 @@ function addSupplyReference() {
   state.selected = supplyReference.id; state.selectedIds = panelReference ? [supplyReference.id, panelReference.id] : [supplyReference.id]; state.selectedLink = null;
   $('#supply-reference-dialog').close(); markChanged(connectedPanel ? 'Fornitura, quadro e collegamento richiamati.' : 'Fornitura richiamata: non risulta collegata a un quadro.'); render();
 }
-function samePhysicalNode(first, second) {
-  if (!first || !second || first.type !== second.type) return false;
-  if (first.type === 'supply') return supplyKey(first) === supplyKey(second);
-  if (first.type === 'panel') return panelKey(first) === panelKey(second);
-  return first.id === second.id;
-}
 function linkReferenceCandidates() {
   const nodes = pageNodes();
   return state.links.filter((link) => !isReferenceLink(link)).map((link) => {
     const originalFrom = nodeById(link.from), originalTo = nodeById(link.to);
-    const from = nodes.find((node) => samePhysicalNode(node, originalFrom)), to = nodes.find((node) => samePhysicalNode(node, originalTo));
+    const from = nodes.find((node) => Core.samePhysicalNode(node, originalFrom)), to = nodes.find((node) => Core.samePhysicalNode(node, originalTo));
     return { link, originalFrom, originalTo, from, to };
   }).filter((item) => item.from && item.to && item.from.id !== item.to.id && !state.links.some((link) => link.from === item.from.id && link.to === item.to.id));
 }
@@ -553,7 +697,7 @@ function autoRecallConnections() {
 }
 function openLinkReferenceDialog() {
   pendingLinkReferences = linkReferenceCandidates();
-  if (!pendingLinkReferences.length) return showStatus('Richiama prima nella pagina sia l’origine sia la destinazione del collegamento.');
+  if (!pendingLinkReferences.length) return showStatus('Richiama prima nella pagina sia l’origine sia la destinazione del collegamento.', 'warning');
   $('#link-reference-choice').innerHTML = pendingLinkReferences.map((item, index) => `<option value="${index}">${esc(item.originalFrom.title)} → ${esc(item.originalTo.title)} · ${esc(cableById(item.link.cable).name)}</option>`).join('');
   $('#link-reference-dialog').showModal();
 }
@@ -561,7 +705,7 @@ function addLinkReference() {
   const item = pendingLinkReferences[Number($('#link-reference-choice').value)];
   if (!item) return;
   checkpoint('add-link-reference'); const link = addLinkReferenceItem(item); if (!link) return;
-  $('#link-reference-dialog').close(); state.selectedLink = link.id; state.selected = null; state.selectedIds = []; markChanged(); render(); showStatus('Collegamento richiamato.');
+  $('#link-reference-dialog').close(); state.selectedLink = link.id; state.selected = null; state.selectedIds = []; markChanged(); render(); showStatus('Collegamento richiamato.', 'success');
 }
 function openBulkLoadDialog() {
   const panels = pageNodes().filter((node) => node.type === 'panel');
@@ -579,32 +723,30 @@ function addBulkLoads() {
   }
   let linked = 0; nodes.forEach((node) => { if (parentId && tryAddLink(parentId, node.id, plugType, 20, false, false)) linked++; });
   const extraPages = ensureLoadPageCapacity(state.currentPage, nodes.map((node) => node.id));
-  $('#bulk-load-dialog').close(); state.selectedIds = nodes.filter((node) => node.page === state.currentPage).map((node) => node.id); state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; markChanged(); render(); showStatus(`Aggiunte ${count} utenze${parentId ? `, collegate ${linked}` : ''}${extraPages ? ` e distribuite su ${extraPages + 1} pagine` : ''}.`);
+  $('#bulk-load-dialog').close(); state.selectedIds = nodes.filter((node) => node.page === state.currentPage).map((node) => node.id); state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; markChanged(); render(); showStatus(`Aggiunte ${count} utenze${parentId ? `, collegate ${linked}` : ''}${extraPages ? ` e distribuite su ${extraPages + 1} pagine` : ''}.`, parentId && linked < count ? 'warning' : 'success');
 }
-function selectedPanelPorts(config) { const alternative = (config.alternatives || []).find((item) => item.id === $('#panel-mode').value); return alternative?.ports || config.ports; }
 function addPanelFromLibrary(matricola) {
-  if (isPanelMatricolaUsed(matricola)) { showStatus(`Il quadro con matricola ${matricola} è già presente nel progetto.`); return; }
-  const config = state.library.find((item) => item.matricola === matricola); if (!config) return showStatus('Configurazione quadro non disponibile.');
+  if (isPanelMatricolaUsed(matricola)) { showStatus(`Il quadro con matricola ${matricola} è già presente nel progetto.`, 'warning'); return; }
+  const config = PANEL_LIBRARY.find((item) => item.matricola === matricola); if (!config) return showStatus('Configurazione quadro non disponibile.', 'warning');
   checkpoint('add-panel'); const index = pageNodes().filter((node) => node.type === 'panel').length + 1;
   const position = panelPosition(index - 1);
-  const alternative = (config.alternatives || []).find((item) => item.id === $('#panel-mode').value);
-  const node = { id: uid(), panelKey: uid(), type: 'panel', page: state.currentPage, x: position.x, y: position.y, title: `Quadro #${index}`, subtitle: 'Da denominare', details: matricola, panelModel: matricola, panelMode: alternative?.label || 'Prese CEE', inputType: config.inputType, socket: '', ports: selectedPanelPorts(config).map((port) => ({ ...port })) };
+  const node = { id: uid(), panelKey: uid(), type: 'panel', page: state.currentPage, x: position.x, y: position.y, title: `Quadro #${index}`, subtitle: '', details: matricola, panelModel: matricola, inputType: config.inputType, socket: '', ports: config.ports.map((port) => ({ ...port })) };
   state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#panel-dialog').close(); markChanged(); render();
 }
 function panelPosition(index) { return { x: Math.min(520, 280 + Math.floor(index / 5) * 240), y: 165 + (index % 5) * 110 }; }
 function renderTemporaryPorts() { $('#temporary-panel-ports').innerHTML = temporaryPorts.map((port, index) => `<div class="temporary-port"><label>Uscita<select data-port-type="${index}">${panelPortOptions(port.type)}</select></label><label>Quantità<input data-port-quantity="${index}" type="number" min="1" value="${port.quantity}" /></label>${temporaryPorts.length > 1 ? `<button type="button" data-remove-port="${index}">Rimuovi</button>` : ''}</div>`).join(''); }
-function openTemporaryPanelDialog(node = null) { editingTemporaryPanelId = node?.id || null; temporaryPorts = node?.ports?.map((port) => ({ ...port })) || [{ type: 'cee16mono', quantity: 1 }]; $('#temporary-panel-input').innerHTML = supplyOptions(node?.inputType || 'cee63tri'); $('#temporary-panel-name').value = node?.title || 'Quadro temporaneo'; $('#temporary-panel-code').value = node?.details || ''; $('#confirm-temporary-panel').textContent = node ? 'Salva modifiche' : 'Aggiungi quadro'; renderTemporaryPorts(); $('#temporary-panel-dialog').showModal(); }
+function openTemporaryPanelDialog(node = null) { editingTemporaryPanelId = node?.id || null; temporaryPorts = node?.ports?.map((port) => ({ ...port })) || [{ type: 'cee16mono', quantity: 1 }]; $('#temporary-panel-input').innerHTML = cableOptions(node?.inputType || 'cee63tri'); $('#temporary-panel-name').value = node?.title || 'Quadro temporaneo'; $('#temporary-panel-code').value = node?.details || ''; $('#confirm-temporary-panel').textContent = node ? 'Salva modifiche' : 'Aggiungi quadro'; renderTemporaryPorts(); $('#temporary-panel-dialog').showModal(); }
 function addTemporaryPanel() {
   const existing = nodeById(editingTemporaryPanelId), inputType = $('#temporary-panel-input').value, title = $('#temporary-panel-name').value || 'Quadro temporaneo', details = $('#temporary-panel-code').value || 'Quadro temporaneo', ports = temporaryPorts.map((port) => ({ ...port }));
   if (existing) {
     const before = historySnapshot(); checkpoint('edit-temporary-panel');
     panelGroup(existing).forEach((panel) => { panel.title = title; panel.details = details; panel.inputType = inputType; panel.ports = ports.map((port) => ({ ...port })); });
     const issue = projectIssues()[0];
-    if (issue) { restoreHistorySnapshot(before); dropNoopHistory(); showStatus(`Modifica annullata: ${issue.message}`); return; }
+    if (issue) { restoreHistorySnapshot(before); dropNoopHistory(); showStatus(`Modifica annullata: ${issue.message}`, 'error'); return; }
     state.selected = existing.id; state.selectedIds = [existing.id]; editingTemporaryPanelId = null; $('#temporary-panel-dialog').close(); markChanged(); render(); return;
   }
   checkpoint('add-temporary-panel');
-  const index = pageNodes().filter((node) => node.type === 'panel').length + 1, position = panelPosition(index - 1); const node = { id: uid(), panelKey: uid(), type: 'panel', page: state.currentPage, x: position.x, y: position.y, title, subtitle: 'Temporaneo', details, panelModel: 'Temporaneo', inputType, socket: '', ports }; state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#temporary-panel-dialog').close(); render();
+  const index = pageNodes().filter((node) => node.type === 'panel').length + 1, position = panelPosition(index - 1); const node = { id: uid(), panelKey: uid(), type: 'panel', page: state.currentPage, x: position.x, y: position.y, title, subtitle: '', details, panelModel: 'Temporaneo', inputType, socket: '', ports }; state.nodes.push(node); state.selected = node.id; state.selectedIds = [node.id]; state.selectedLink = null; $('#temporary-panel-dialog').close(); render();
   markChanged();
 }
 function detectCsvDelimiter(text) {
@@ -674,7 +816,7 @@ function placeNewLoads(nodes, page) {
   });
 }
 function createPhysicalReference(source, page) {
-  const existing = state.nodes.find((node) => node.page === page && samePhysicalNode(node, source));
+  const existing = state.nodes.find((node) => node.page === page && Core.samePhysicalNode(node, source));
   if (existing) return existing;
   const index = state.nodes.filter((node) => node.page === page && node.type === source.type).length;
   const position = source.type === 'supply' ? { x: 90, y: 135 + index * 95 } : panelPosition(index);
@@ -739,6 +881,7 @@ function renderCaptureImportDialog() {
 function updateCaptureSocapexAvailability() {
   const enabled = !!$('#capture-parent').value;
   $('#capture-use-socapex').disabled = !enabled;
+  $('#capture-use-socapex').closest('.inline-option').classList.toggle('is-disabled', !enabled);
   if (!enabled) $('#capture-use-socapex').checked = false;
   $('#capture-socapex-help').textContent = enabled ? 'I circuiti CEE 16 A monofase saranno raggruppati automaticamente, fino a 6 per ogni Socapex.' : 'Scegli prima un quadro per attivare il collegamento tramite Socapex.';
 }
@@ -747,7 +890,7 @@ function connectLoadsAsSocapex(parentId, loadIds, length = 20) {
   if (!parent || parent.type !== 'panel') return { linked: 0, groups: 0 };
   let linked = 0, groups = 0;
   for (let offset = 0; offset < eligibleIds.length;) {
-    const target = nodeById(eligibleIds[offset]), sockets = availablePanelSockets(parent, target);
+    const sockets = Core.availableSocapexSockets(state, parent);
     if (!sockets.length) break;
     const groupIds = eligibleIds.slice(offset, offset + Math.min(6, sockets.length)), groupId = uid();
     groupIds.forEach((loadId, index) => { const load = nodeById(loadId); load.socket = sockets[index].name; state.links.push({ id: uid(), from: parentId, to: loadId, cable: 'socapex', length, socapexGroup: groupId }); });
@@ -757,13 +900,13 @@ function connectLoadsAsSocapex(parentId, loadIds, length = 20) {
 }
 function importSelectedCaptureGroups() {
   const selected = [...document.querySelectorAll('[data-capture-index]:checked')].map((input) => pendingCaptureGroups[Number(input.dataset.captureIndex)]), parent = $('#capture-parent').value, useSocapex = parent && $('#capture-use-socapex').checked; let index = pageNodes().filter((node) => node.type === 'load').length, linked = 0, socapexGroups = 0; const importedIds = [];
-  if (!selected.length) return showStatus('Seleziona almeno un circuito da importare.');
+  if (!selected.length) return showStatus('Seleziona almeno un circuito da importare.', 'warning');
   checkpoint('import-capture');
   selected.forEach((group) => { index++; const node = { id: uid(), type: 'load', page: state.currentPage, x: 835, y: Math.min(650, 120 + index * 75), title: `Circuito ${group.circuit}`, subtitle: CABLES[0].plug, plugType: 'cee16mono', details: `Assorbimento ${(group.watts / 1000).toLocaleString('it-IT', { maximumFractionDigits: 2 })} kW`, socket: '', watts: group.watts, fixtures: group.fixtures }; state.nodes.push(node); importedIds.push(node.id); });
   if (useSocapex) ({ linked, groups: socapexGroups } = connectLoadsAsSocapex(parent, importedIds));
   else if (parent) importedIds.forEach((id) => { if (tryAddLink(parent, id, 'cee16mono', 20, false, false)) linked++; });
   const extraPages = ensureLoadPageCapacity(state.currentPage, importedIds);
-  $('#capture-import-dialog').close(); state.selectedIds = importedIds.filter((id) => nodeById(id)?.page === state.currentPage); state.selected = state.selectedIds.at(-1) || null; markChanged(); render(); showStatus(`Importati ${selected.length} circuiti${parent ? `, collegati ${linked}${useSocapex ? ` in ${socapexGroups} Socapex` : ''}` : ''}${parent && linked < selected.length ? `; ${selected.length - linked} senza collegamento per mancanza di prese libere` : ''}${extraPages ? `, distribuiti su ${extraPages + 1} pagine` : ''}.`);
+  $('#capture-import-dialog').close(); state.selectedIds = importedIds.filter((id) => nodeById(id)?.page === state.currentPage); state.selected = state.selectedIds.at(-1) || null; markChanged(); render(); showStatus(`Importati ${selected.length} circuiti${parent ? `, collegati ${linked}${useSocapex ? ` in ${socapexGroups} Socapex` : ''}` : ''}${parent && linked < selected.length ? `; ${selected.length - linked} senza collegamento per mancanza di prese libere` : ''}${extraPages ? `, distribuiti su ${extraPages + 1} pagine` : ''}.`, parent && linked < selected.length ? 'warning' : 'success');
 }
 function openSocapexDialog() {
   const panels = pageNodes().filter((node) => node.type === 'panel');
@@ -772,45 +915,55 @@ function openSocapexDialog() {
   const prefixes = [...new Set(loads.map((node) => circuitPrefix(node.title)))];
   $('#socapex-prefix-actions').innerHTML = prefixes.map((prefix) => `<button type="button" data-socapex-prefix="${esc(prefix)}">Solo ${esc(prefix)}</button>`).join('');
   $('#socapex-load-list').innerHTML = loads.length ? loads.map((node) => `<label class="capture-circuit"><input type="checkbox" data-socapex-load="${node.id}" /><span><strong>${esc(node.title)}</strong><br />${esc(node.socket ? `Presa ${node.socket} · ` : '')}${esc(node.details || '')}</span></label>`).join('') : '<p class="help">Non ci sono utenze CEE 16 A monofase non ancora collegate in questa pagina.</p>';
-  if (!panels.length) { showStatus('Aggiungi prima un quadro a questa pagina.'); return; }
+  if (!panels.length) { showStatus('Aggiungi prima un quadro a questa pagina.', 'warning'); return; }
   $('#socapex-dialog').showModal();
 }
 function createSocapexGroup() {
   const parentId = $('#socapex-parent').value, loadIds = [...document.querySelectorAll('[data-socapex-load]:checked')].map((input) => input.dataset.socapexLoad), parent = nodeById(parentId);
-  if (!parent || !loadIds.length) return showStatus('Seleziona un quadro e almeno un’utenza.');
-  if (loadIds.length > 6) return showStatus('Un Socapex può raggruppare al massimo 6 utenze CEE 16 A monofase.');
+  if (!parent || !loadIds.length) return showStatus('Seleziona un quadro e almeno un’utenza.', 'warning');
+  if (loadIds.length > 6) return showStatus('Un Socapex può raggruppare al massimo 6 utenze CEE 16 A monofase.', 'warning');
   const capacity = (parent.ports || []).filter((port) => port.type === 'cee16mono').reduce((sum, port) => sum + port.quantity, 0), used = state.links.filter((link) => !isReferenceLink(link) && panelKey(nodeById(link.from)) === panelKey(parent) && requiredPlug(nodeById(link.to)) === 'cee16mono').length;
-  if (used + loadIds.length > capacity) return showStatus(`Collegamento bloccato: le prese CEE 16 A monofase del quadro ${parent.title} non bastano (${used}/${capacity} già impegnate).`);
-  const sockets = availablePanelSockets(parent, nodeById(loadIds[0]));
-  if (sockets.length < loadIds.length) return showStatus(`Collegamento bloccato: non ci sono abbastanza prese CEE 16 A monofase libere sul quadro ${parent.title}.`);
+  if (used + loadIds.length > capacity) return showStatus(`Collegamento bloccato: le prese CEE 16 A monofase del quadro ${parent.title} non bastano (${used}/${capacity} già impegnate).`, 'error');
+  const sockets = Core.availableSocapexSockets(state, parent);
+  if (sockets.length < loadIds.length) return showStatus(`Collegamento bloccato: non c’è un banco Socapex con abbastanza prese libere sul quadro ${parent.title}.`, 'error');
   checkpoint('create-socapex'); connectLoadsAsSocapex(parentId, loadIds);
-  $('#socapex-dialog').close(); state.selected = loadIds.at(-1); state.selectedIds = loadIds; state.selectedLink = null; markChanged(); render(); showStatus(`Creato Socapex unico per ${loadIds.length} utenz${loadIds.length === 1 ? 'a' : 'e'}.`);
+  $('#socapex-dialog').close(); state.selected = loadIds.at(-1); state.selectedIds = loadIds; state.selectedLink = null; markChanged(); render(); showStatus(`Creato Socapex unico per ${loadIds.length} utenz${loadIds.length === 1 ? 'a' : 'e'}.`, 'success');
+}
+function reassignSocapexSockets() {
+  const link = linkById(state.selectedLink), parent = link && nodeById(link.from);
+  if (!link?.socapexGroup || isReferenceLink(link) || !parent) return;
+  const group = socapexGroupLinks(link), sockets = Core.availableSocapexSockets(state, parent, link.socapexGroup);
+  if (sockets.length < group.length) return showStatus('Non c’è un banco libero sufficiente per questo Socapex.', 'warning');
+  checkpoint('reassign-socapex');
+  group.forEach((member, index) => { nodeById(member.to).socket = sockets[index].name; });
+  markChanged(`Prese del Socapex riassegnate: ${sockets.slice(0, group.length).map((socket) => socket.name).join(', ')}.`);
+  render();
 }
 function openBulkConnectDialog() {
   const sources = pageNodes().filter((node) => node.type === 'panel'), selectedIds = new Set(state.selectedIds), loads = pageNodes().filter((node) => node.type === 'load' && !state.links.some((link) => link.to === node.id));
-  $('#bulk-connect-parent').innerHTML = sources.map((node) => `<option value="${node.id}" ${selectedIds.has(node.id) ? 'selected' : ''}>${node.type === 'panel' ? 'Quadro' : 'Fornitura'}: ${esc(node.title)}</option>`).join('');
+  $('#bulk-connect-parent').innerHTML = sources.map((node) => `<option value="${node.id}" ${selectedIds.has(node.id) ? 'selected' : ''}>Quadro: ${esc(node.title)}</option>`).join('');
   $('#bulk-connect-load-list').innerHTML = loads.length ? loads.map((node) => `<label class="capture-circuit"><input type="checkbox" data-bulk-connect-load="${node.id}" ${selectedIds.has(node.id) ? 'checked' : ''}/><span><strong>${esc(node.title)}</strong><br />${esc(node.socket ? `Presa ${node.socket} · ` : '')}${esc(cableById(node.plugType).name)}</span></label>`).join('') : '<p class="help">Non ci sono utenze non ancora collegate in questa pagina.</p>';
-  if (!sources.length) { showStatus('Aggiungi prima un quadro a questa pagina.'); return; }
+  if (!sources.length) { showStatus('Aggiungi prima un quadro a questa pagina.', 'warning'); return; }
   $('#bulk-connect-dialog').showModal();
 }
 function createBulkConnections() {
   const parentId = $('#bulk-connect-parent').value, targetIds = [...document.querySelectorAll('[data-bulk-connect-load]:checked')].map((input) => input.dataset.bulkConnectLoad), parent = nodeById(parentId);
-  if (!parent || !targetIds.length) return showStatus('Seleziona un quadro e almeno un’utenza.');
+  if (!parent || !targetIds.length) return showStatus('Seleziona un quadro e almeno un’utenza.', 'warning');
   const targets = targetIds.map(nodeById).filter(Boolean), requirements = new Map();
   targets.forEach((node) => requirements.set(requiredPlug(node), (requirements.get(requiredPlug(node)) || 0) + 1));
   if (parent.type === 'panel') {
     for (const [plug, count] of requirements) {
       const capacity = (parent.ports || []).filter((port) => port.type === plug).reduce((sum, port) => sum + port.quantity, 0), used = state.links.filter((link) => !isReferenceLink(link) && panelKey(nodeById(link.from)) === panelKey(parent) && requiredPlug(nodeById(link.to)) === plug).length;
-      if (used + count > capacity) return showStatus(`Collegamento bloccato: le prese ${cableById(plug).name} del quadro ${parent.title} non bastano (${used}/${capacity} già impegnate).`);
+      if (used + count > capacity) return showStatus(`Collegamento bloccato: le prese ${cableById(plug).name} del quadro ${parent.title} non bastano (${used}/${capacity} già impegnate).`, 'error');
     }
   }
-  const incompatible = targets.map((node) => compatibilityWarning(parent, node)).find(Boolean); if (incompatible) return showStatus(incompatible);
+  const incompatible = targets.map((node) => compatibilityWarning(parent, node)).find(Boolean); if (incompatible) return showStatus(incompatible, 'error');
   checkpoint('bulk-connect'); targets.forEach((node) => tryAddLink(parent.id, node.id, requiredPlug(node), 20, false, false));
-  $('#bulk-connect-dialog').close(); state.selectedIds = [parent.id, ...targetIds]; state.selected = parent.id; state.selectedLink = null; markChanged(); render(); showStatus(`Collegate ${targetIds.length} utenz${targetIds.length === 1 ? 'a' : 'e'}.`);
+  $('#bulk-connect-dialog').close(); state.selectedIds = [parent.id, ...targetIds]; state.selected = parent.id; state.selectedLink = null; markChanged(); render(); showStatus(`Collegate ${targetIds.length} utenz${targetIds.length === 1 ? 'a' : 'e'}.`, 'success');
 }
 function openArrangeDialog() {
   const targets = selectedNodes();
-  if (!targets.length) { showStatus('Seleziona gli elementi da ordinare, oppure disegna un riquadro attorno a loro.'); return; }
+  if (!targets.length) { showStatus('Seleziona gli elementi da ordinare, oppure disegna un riquadro attorno a loro.', 'warning'); return; }
   const references = pageNodes().filter((node) => !state.selectedIds.includes(node.id));
   $('#arrange-reference').innerHTML = references.map((node) => `<option value="${node.id}">${node.type === 'panel' ? 'Quadro' : node.type === 'supply' ? 'Fornitura' : 'Utenza'}: ${esc(node.title)}</option>`).join('');
   $('#arrange-reference-row').hidden = true; $('#arrange-mode').value = 'center'; $('#arrange-dialog').showModal();
@@ -819,91 +972,58 @@ function arrangeSelectedNodes() {
   const targets = selectedNodes(), mode = $('#arrange-mode').value, reference = nodeById($('#arrange-reference').value);
   if (!targets.length) return;
   checkpoint('arrange'); arrangeNodes(targets, mode === 'relative' && reference ? reference.x + 310 : 600);
-  $('#arrange-dialog').close(); markChanged(); render(); showStatus(`${targets.length} elementi ordinati.`);
+  $('#arrange-dialog').close(); markChanged(); render(); showStatus(`${targets.length} elementi ordinati.`, 'success');
 }
-function openAlignDialog() { if (!selectedNodes().length) return showStatus('Seleziona gli elementi da allineare.'); $('#align-dialog').showModal(); }
+function openAlignDialog() { if (!selectedNodes().length) return showStatus('Seleziona gli elementi da allineare.', 'warning'); $('#align-dialog').showModal(); }
+function distributeSelectedNodes(axis) {
+  const nodes = selectedNodes().length ? selectedNodes() : pageNodes().filter((node) => node.type === 'load');
+  if (nodes.length < 3) return showStatus('Seleziona almeno tre elementi da spaziare, oppure togli la selezione per spaziare tutte le utenze della pagina.', 'warning');
+  const result = Core.distributeNodes(nodes.map((node) => ({ id: node.id, x: node.x, y: node.y, width: NODE_HALF * 2, height: nodeDisplayHeight(node) })), axis);
+  if (!result.ok) return showStatus('Spazio insufficiente per distanziare questi elementi su una sola riga o colonna. Usa “Ordina selezionati”.', 'warning');
+  checkpoint(`distribute-${axis}`);
+  result.positions.forEach((position) => Object.assign(nodeById(position.id), { x: position.x, y: position.y }));
+  markChanged(`Spaziatura uniforme applicata a ${nodes.length} elementi.`); render();
+}
 function alignSelectedNodes() {
-  const nodes = selectedNodes(); if (nodes.length < 2) return showStatus('Seleziona almeno due elementi da allineare.');
+  const nodes = selectedNodes(); if (nodes.length < 2) return showStatus('Seleziona almeno due elementi da allineare.', 'warning');
   const mode = $('#align-mode').value;
   const aligned = Core.alignNodesWithoutOverlap(nodes.map((node) => ({ id: node.id, x: node.x, y: node.y, width: NODE_HALF * 2, height: nodeDisplayHeight(node) })), mode, { gap: 24 });
-  if (!aligned.ok) return showStatus('Non c’è spazio sufficiente per allineare questi elementi senza sovrapporli. Usa “Ordina selezionati” oppure riduci la selezione.');
+  if (!aligned.ok) return showStatus('Non c’è spazio sufficiente per allineare questi elementi senza sovrapporli. Usa “Ordina selezionati” oppure riduci la selezione.', 'warning');
   checkpoint('align');
   const positions = new Map(aligned.positions.map((position) => [position.id, position]));
   nodes.forEach((node) => { const position = positions.get(node.id); node.x = position.x; node.y = position.y; });
-  $('#align-dialog').close(); markChanged(); render(); showStatus(`${nodes.length} elementi allineati e distanziati.`);
+  $('#align-dialog').close(); markChanged(); render(); showStatus(`${nodes.length} elementi allineati e distanziati.`, 'success');
 }
 function duplicateSelectedLoads() {
   const originals = selectedNodes().filter((node) => node.type === 'load');
-  if (!originals.length) return showStatus('Seleziona almeno un’utenza da duplicare.');
+  if (!originals.length) return showStatus('Seleziona almeno un’utenza da duplicare.', 'warning');
   checkpoint('duplicate-loads'); const duplicates = originals.map((original, index) => {
     const baseTitle = original.title.replace(/\s+copia(?:\s+\d+)?$/i, ''), sameTitles = state.nodes.filter((node) => node.type === 'load' && node.page === state.currentPage && node.title.startsWith(`${baseTitle} copia`)).length;
     return { ...original, id: uid(), title: `${baseTitle} copia${sameTitles + index ? ` ${sameTitles + index + 1}` : ''}`, socket: '', x: original.x + 20, y: original.y + 20 };
   });
-  state.nodes.push(...duplicates); const extraPages = ensureLoadPageCapacity(state.currentPage, duplicates.map((node) => node.id)); state.selectedIds = duplicates.filter((node) => node.page === state.currentPage).map((node) => node.id); state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; markChanged(); render(); showStatus(`Duplicate ${duplicates.length} utenz${duplicates.length === 1 ? 'a' : 'e'}${extraPages ? ` su ${extraPages + 1} pagine` : ''}.`);
-}
-function migrateLegacySocapex(project) {
-  project.nodes = Array.isArray(project.nodes) ? project.nodes : [];
-  project.links = Array.isArray(project.links) ? project.links : [];
-  const legacy = (project.nodes || []).filter((node) => node.type === 'socapex');
-  legacy.forEach((socapex) => {
-    const incoming = project.links.find((link) => link.to === socapex.id), outgoing = project.links.filter((link) => link.from === socapex.id);
-    if (incoming && outgoing.length) {
-      const groupId = uid();
-      outgoing.forEach((link, index) => project.links.push({ id: uid(), from: incoming.from, to: link.to, cable: 'socapex', length: incoming.length || 20, socapexGroup: groupId, labelX: index === 0 ? incoming.labelX : undefined, labelY: index === 0 ? incoming.labelY : undefined }));
-    }
-    project.links = project.links.filter((link) => link.from !== socapex.id && link.to !== socapex.id);
-  });
-  project.nodes = (project.nodes || []).filter((node) => node.type !== 'socapex');
-}
-function migrateSupplyReferences(project) {
-  (project.nodes || []).filter((node) => node.type === 'supply').forEach((node) => { node.supplyKey ||= node.id; });
-}
-function migratePanelReferences(project) {
-  (project.nodes || []).filter((node) => node.type === 'panel').forEach((node) => { node.panelKey ||= node.id; });
-}
-function migratePowerLockSupplyTypes(project) {
-  (project.nodes || []).filter((node) => node.type === 'supply' && node.supplyType === 'powerlock').forEach((node) => { node.supplyType = 'powerlock250'; node.subtitle = cableById(node.supplyType).plug; });
-  (project.links || []).filter((link) => link.cable === 'powerlock').forEach((link) => { const source = (project.nodes || []).find((node) => node.id === link.from); link.cable = source?.supplyType === 'powerlock400' ? 'powerlock400' : 'powerlock250'; });
-}
-function migratePanelInputCables(project) {
-  const nodes = new Map((project.nodes || []).map((node) => [node.id, node]));
-  (project.links || []).forEach((link) => {
-    const target = nodes.get(link.to), inputType = target?.type === 'panel' ? target.inputType : null;
-    if (!inputType || !inputType.startsWith('cee')) { link.cableSection ||= link.cable; return; }
-    const previousCable = link.cable;
-    link.cable = inputType;
-    if (!link.cableSection || link.cableSection === previousCable) link.cableSection = inputType;
-  });
-}
-function migrateProject(project) {
-  if (!project || typeof project !== 'object' || Array.isArray(project)) throw new Error('Il file non contiene un progetto valido.');
-  migrateLegacySocapex(project);
-  migrateSupplyReferences(project);
-  migratePanelReferences(project);
-  migratePowerLockSupplyTypes(project);
-  migratePanelInputCables(project);
-  project.version = Core.SCHEMA_VERSION;
-  return project;
+  state.nodes.push(...duplicates); const extraPages = ensureLoadPageCapacity(state.currentPage, duplicates.map((node) => node.id)); state.selectedIds = duplicates.filter((node) => node.page === state.currentPage).map((node) => node.id); state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; markChanged(); render(); showStatus(`Duplicate ${duplicates.length} utenz${duplicates.length === 1 ? 'a' : 'e'}${extraPages ? ` su ${extraPages + 1} pagine` : ''}.`, 'success');
 }
 function applyLoadedProject(raw, options = {}) {
-  const normalized = Core.normalizeProject(migrateProject(raw));
-  state = { ...normalized, library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null };
+  const normalized = Core.normalizeProject(raw);
+  clearTimeout(autosaveTimer);
+  autosaveTimer = null;
+  state = { ...normalized, selected: null, selectedIds: [], selectedLink: null };
   phaseSupplyFilter = '';
-  syncMetaInputs(); resetHistory(); $('#welcome-dialog').close();
+  fillProjectForm(state.meta); resetHistory(); $('#welcome-dialog').close();
   savedProjectSnapshot = options.dirty ? null : JSON.stringify(serializableProject());
   dirty = Boolean(options.dirty);
   updateDirtyUi(); render();
   const issues = projectIssues();
-  if (issues.length) showStatus(`Progetto aperto con ${issues.length} anomalie: ${issues[0].message}`);
-  else showStatus(options.message || 'Progetto aperto correttamente.');
-  flushAutosave();
+  if (issues.length) showStatus(`Progetto aperto con ${issues.length} anomalie: ${issues[0].message}`, 'warning');
+  else showStatus(options.message || 'Progetto aperto correttamente.', 'success');
+  if (options.dirty) flushAutosave();
 }
 function loadProjectText(text, options = {}) {
   try {
     applyLoadedProject(JSON.parse(text), options);
     return true;
   } catch (error) {
-    showStatus(`Impossibile aprire il progetto: ${error.message}`);
+    showStatus(`Impossibile aprire il progetto: ${error.message}`, 'error');
     return false;
   }
 }
@@ -911,12 +1031,59 @@ function formatProjectLocation(street, postcode, city, province) {
   const locality = [postcode, city].filter(Boolean).join(' ');
   return [street, locality && province ? `${locality} (${province})` : locality || province].filter(Boolean).join(', ');
 }
+function loadCompanyBook() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COMPANY_BOOK_KEY) || '[]');
+    companyBook = Array.isArray(saved) ? saved.filter((item) => item && typeof item.id === 'string' && typeof item.company === 'string').slice(0, 300).map((item) => ({
+      id: item.id, company: item.company.slice(0, 200), companyAddress: String(item.companyAddress || '').slice(0, 500), companyVat: String(item.companyVat || '').slice(0, 100),
+    })) : [];
+  } catch { companyBook = []; }
+  renderCompanyBook();
+}
+function renderCompanyBook(selected = '') {
+  $('#company-book').innerHTML = '<option value="">Compila una nuova ditta</option>' + [...companyBook].sort((a, b) => a.company.localeCompare(b.company, 'it')).map((item) => `<option value="${esc(item.id)}">${esc(item.company)}${item.companyVat ? ` · ${esc(item.companyVat)}` : ''}</option>`).join('');
+  $('#company-book').value = selected;
+  $('#remove-company').disabled = !selected;
+}
+function saveCompanyToBook() {
+  const company = $('#project-company-name').value.trim(), status = $('#company-book-status');
+  if (!company) { status.textContent = 'Scrivi la denominazione della ditta prima di salvarla.'; return; }
+  const companyVat = $('#project-company-vat').value.trim();
+  const existing = companyBook.find((item) => item.id === $('#company-book').value) || companyBook.find((item) => item.company.toLocaleLowerCase('it') === company.toLocaleLowerCase('it') && item.companyVat === companyVat);
+  const entry = { id: existing?.id || uid(), company, companyAddress: $('#project-company-address').value.trim(), companyVat };
+  const next = [...companyBook.filter((item) => item.id !== entry.id), entry];
+  try {
+    localStorage.setItem(COMPANY_BOOK_KEY, JSON.stringify(next));
+    companyBook = next;
+    renderCompanyBook(entry.id);
+    status.textContent = existing ? 'Ditta aggiornata in rubrica.' : 'Ditta salvata in rubrica.';
+  } catch { status.textContent = 'Rubrica non disponibile in questo browser. Puoi comunque salvare la ditta nel progetto.'; }
+}
+function selectCompanyFromBook() {
+  const entry = companyBook.find((item) => item.id === $('#company-book').value);
+  ['company', 'companyAddress', 'companyVat'].forEach((key) => {
+    const id = { company: 'project-company-name', companyAddress: 'project-company-address', companyVat: 'project-company-vat' }[key];
+    $(`#${id}`).value = entry?.[key] || '';
+  });
+  $('#remove-company').disabled = !entry;
+  $('#company-book-status').textContent = entry ? 'Ditta selezionata. Puoi modificarne i dati per questo progetto.' : 'La rubrica viene conservata in questo browser.';
+}
+function removeCompanyFromBook() {
+  const id = $('#company-book').value;
+  if (!id) return;
+  const next = companyBook.filter((item) => item.id !== id);
+  try {
+    localStorage.setItem(COMPANY_BOOK_KEY, JSON.stringify(next)); companyBook = next; renderCompanyBook();
+    $('#company-book-status').textContent = 'Ditta rimossa dalla rubrica. I dati compilati nel progetto restano disponibili.';
+  } catch { $('#company-book-status').textContent = 'Impossibile aggiornare la rubrica in questo browser.'; }
+}
 function resetProjectLocationSearch() {
   projectLocationController?.abort(); projectLocationController = null; projectLocationResults = [];
   const search = $('#project-location-search'), results = $('#project-location-results'), status = $('#project-location-search-status');
   if (search) search.value = '';
   if (results) { results.innerHTML = ''; results.hidden = true; }
   if (status) status.textContent = '';
+  $('#search-project-location').disabled = false;
 }
 function normalizeProvince(value) {
   return String(value || '').replace(/^(?:Provincia|Città metropolitana) di\s+/i, '').replace(/^Metropolitan City of\s+/i, '').trim();
@@ -939,25 +1106,31 @@ function renderProjectLocationResults(results) {
   $('#project-location-search-status').textContent = results.length ? `${results.length} risultat${results.length === 1 ? 'o' : 'i'}: scegli l’indirizzo corretto.` : 'Nessun indirizzo trovato. Puoi compilare i campi manualmente.';
 }
 async function searchProjectLocation() {
-  const query = $('#project-location-search').value.trim(), status = $('#project-location-search-status'), button = $('#search-project-location');
-  if (query.length < 3) { status.textContent = 'Scrivi almeno 3 caratteri per cercare.'; return; }
+  const query = $('#project-location-search').value.trim() || ['street', 'postcode', 'city', 'province'].map((part) => $(`#project-location-${part}`).value.trim()).filter(Boolean).join(' ');
+  const status = $('#project-location-search-status'), button = $('#search-project-location');
+  if (query.length < 3) { status.textContent = 'Scrivi l’indirizzo da cercare qui sopra oppure nel campo Via / Strada / Piazza.'; $('#project-location-search').focus(); return; }
+  projectLocationController?.abort();
+  projectLocationController = null;
   const cacheKey = query.toLocaleLowerCase('it-IT');
-  if (projectLocationCache.has(cacheKey)) { renderProjectLocationResults(projectLocationCache.get(cacheKey)); return; }
-  projectLocationController?.abort(); const controller = new AbortController(); projectLocationController = controller;
+  if (projectLocationCache.has(cacheKey)) { button.disabled = false; renderProjectLocationResults(projectLocationCache.get(cacheKey)); return; }
+  const controller = new AbortController(); projectLocationController = controller;
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 10000);
   button.disabled = true; status.textContent = 'Ricerca indirizzo in corso…'; $('#project-location-results').hidden = true;
   try {
     const url = new URL('https://photon.komoot.io/api/');
     url.searchParams.set('q', query); url.searchParams.set('limit', '6'); url.searchParams.set('bbox', '6.4,35.3,18.8,47.2');
-    const response = await fetch(url, { signal: controller.signal, headers: { Accept: 'application/json' } });
+    const response = await fetch(url, { signal: controller.signal, credentials: 'omit', headers: { Accept: 'application/json' } });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     const results = (Array.isArray(data.features) ? data.features : []).map(photonLocation).filter((result) => result.street || result.city);
     projectLocationCache.set(cacheKey, results);
     if (projectLocationCache.size > 30) projectLocationCache.delete(projectLocationCache.keys().next().value);
-    renderProjectLocationResults(results);
+    if (projectLocationController === controller) renderProjectLocationResults(results);
   } catch (error) {
-    if (error.name !== 'AbortError') status.textContent = 'Ricerca momentaneamente non disponibile. Puoi compilare i campi manualmente.';
+    if (projectLocationController === controller && (timedOut || error.name !== 'AbortError')) status.textContent = 'Ricerca momentaneamente non disponibile. Puoi compilare i campi manualmente.';
   } finally {
+    clearTimeout(timeout);
     if (projectLocationController === controller) { projectLocationController = null; button.disabled = false; }
   }
 }
@@ -990,6 +1163,8 @@ function projectMetaFromForm() {
   };
 }
 function fillProjectForm(meta) {
+  renderCompanyBook();
+  $('#company-book-status').textContent = 'La rubrica viene conservata in questo browser.';
   const ids = { name: 'project-event-name', type: 'project-type', revision: 'project-version', company: 'project-company-name', companyAddress: 'project-company-address', companyVat: 'project-company-vat' };
   Object.entries(ids).forEach(([key, id]) => { $(`#${id}`).value = meta[key] || ''; });
   const hasStructuredLocation = Boolean(meta.locationStreet || meta.locationPostcode || meta.locationCity || meta.locationProvince);
@@ -1003,7 +1178,7 @@ function openProjectDialog(mode = 'edit') {
   projectDialogMode = mode;
   const creating = mode === 'new';
   const defaults = creating
-    ? { name: '', location: '', locationStreet: '', locationPostcode: '', locationCity: '', locationProvince: '', type: 'Allestimento Luci', revision: '1.0', company: state.meta.company || 'ATS Srl', companyAddress: state.meta.companyAddress || '', companyVat: state.meta.companyVat || '' }
+    ? { name: '', location: '', locationStreet: '', locationPostcode: '', locationCity: '', locationProvince: '', type: 'Allestimento Luci', revision: '1.0', company: '', companyAddress: '', companyVat: '' }
     : state.meta;
   fillProjectForm(defaults);
   $('#project-dialog-title').textContent = creating ? 'Nuovo progetto' : 'Proprietà progetto';
@@ -1021,26 +1196,60 @@ function confirmProjectProperties() {
   const meta = projectMetaFromForm();
   if (projectDialogMode === 'new') {
     const normalized = Core.normalizeProject({ version: Core.SCHEMA_VERSION, meta, pages: [1], nodes: [], links: [] });
-    state = { ...normalized, library: PANEL_LIBRARY, selected: null, selectedIds: [], selectedLink: null };
-    resetHistory(); savedProjectSnapshot = null; $('#welcome-dialog').close(); $('#project-dialog').close(); syncMetaInputs(); markChanged('Nuovo progetto creato.'); render();
+    state = { ...normalized, selected: null, selectedIds: [], selectedLink: null };
+    resetHistory(); savedProjectSnapshot = null; $('#welcome-dialog').close(); $('#project-dialog').close(); fillProjectForm(state.meta); markChanged('Nuovo progetto creato.'); render();
     return;
   }
-  checkpoint('edit-project'); state.meta = meta; $('#project-dialog').close(); syncMetaInputs(); markChanged('Proprietà progetto aggiornate.'); render();
+  checkpoint('edit-project'); state.meta = meta; $('#project-dialog').close(); fillProjectForm(state.meta); markChanged('Proprietà progetto aggiornate.'); render();
 }
 function panelTypeCode(matricola) { return matricola.match(/^[A-Z]+\d+[A-Z]*/)?.[0] || matricola; }
 function panelTypeLabel(code) { return ({ PB250A: 'Quadro 250 A', PB125A: 'Quadro 125 A', PB63A: 'Quadro 63 A', PB32AT: 'Quadro 32 A trifase', PB32AM: 'Quadro 32 A monofase' })[code] || code; }
-function updatePanelMatricolaChoices() { const type = $('#panel-type').value, models = state.library.filter((model) => panelTypeCode(model.matricola) === type && !isPanelMatricolaUsed(model.matricola)); $('#panel-choice').innerHTML = models.length ? models.map((model) => `<option value="${model.matricola}">${model.matricola}</option>`).join('') : '<option value="">Nessuna matricola disponibile</option>'; updatePanelChoiceDetails(); }
+function panelSocketCounts(panel) {
+  const sockets = Core.panelSockets(panel), key = panelKey(panel);
+  const occupied = new Set(state.links.filter((link) => !isReferenceLink(link) && panelKey(nodeById(link.from)) === key).map((link) => nodeById(link.to)?.socket));
+  const types = [...new Set(sockets.map((socket) => socket.type))];
+  return types.map((type) => ({ type, total: sockets.filter((socket) => socket.type === type).length, free: sockets.filter((socket) => socket.type === type && !occupied.has(socket.name)).length }));
+}
+function panelSocketSummaryMarkup(panel) {
+  return `<div class="socket-summary"><strong>Prese libere / totali</strong>${panelSocketCounts(panel).map((count) => `<span><b>${count.free}/${count.total}</b> ${esc(cableById(count.type).name)}</span>`).join('')}</div>`;
+}
+function updatePanelMatricolaChoices() {
+  const query = $('#panel-search').value.toLocaleLowerCase('it').trim().split(/\s+/).filter(Boolean);
+  const type = $('#panel-type').value, input = $('#panel-input-filter').value, includeUsed = $('#panel-include-used').checked;
+  const models = PANEL_LIBRARY.filter((model) => {
+    const used = isPanelMatricolaUsed(model.matricola);
+    const text = `${model.matricola} ${panelTypeLabel(panelTypeCode(model.matricola))} ${cableById(model.inputType).name} ${cableById(model.inputType).plug}`.toLocaleLowerCase('it');
+    return (!type || panelTypeCode(model.matricola) === type) && (!input || model.inputType === input) && (includeUsed || !used) && query.every((word) => text.includes(word));
+  });
+  const selected = $('#panel-choice').value, available = models.filter((model) => !isPanelMatricolaUsed(model.matricola));
+  $('#panel-choice').innerHTML = available.length ? available.map((model) => `<option value="${model.matricola}" ${model.matricola === selected ? 'selected' : ''}>${model.matricola}</option>`).join('') : '<option value="">Nessuna matricola disponibile</option>';
+  $('#panel-results-count').textContent = `${models.length} quadri trovati · ${available.length} disponibili`;
+  $('#panel-results').innerHTML = models.length ? models.map((model) => {
+    const existing = state.nodes.find((node) => node.type === 'panel' && node.panelModel === model.matricola);
+    const panel = existing || { id: `catalog:${model.matricola}`, panelModel: model.matricola, ports: model.ports };
+    return `<article class="catalog-card"><div><strong>${esc(model.matricola)}</strong><span>${esc(cableById(model.inputType).name)} in ingresso</span></div>${panelSocketSummaryMarkup(panel)}<button type="button" class="button" data-choose-panel="${esc(model.matricola)}" ${existing ? 'disabled' : ''}>${existing ? `Già in uso · pagina ${existing.page}` : 'Scegli questo quadro'}</button></article>`;
+  }).join('') : '<p class="catalog-empty">Nessun quadro corrisponde ai filtri. Prova una matricola o un ingresso diverso.</p>';
+  updatePanelChoiceDetails();
+}
 function openPanelDialog() {
-  const types = [...new Set(state.library.filter((model) => !isPanelMatricolaUsed(model.matricola)).map((model) => panelTypeCode(model.matricola)))];
-  if (!types.length) return showStatus('La libreria standard quadri non è disponibile.');
-  $('#panel-type').innerHTML = types.map((type) => `<option value="${type}">${panelTypeLabel(type)}</option>`).join(''); updatePanelMatricolaChoices(); $('#panel-dialog').showModal();
+  const types = [...new Set(PANEL_LIBRARY.map((model) => panelTypeCode(model.matricola)))];
+  $('#panel-search').value = '';
+  $('#panel-include-used').checked = false;
+  $('#panel-type').innerHTML = '<option value="">Tutti i quadri</option>' + types.map((type) => `<option value="${type}">${panelTypeLabel(type)}</option>`).join('');
+  const inputs = [...new Set(PANEL_LIBRARY.map((model) => model.inputType))];
+  $('#panel-input-filter').innerHTML = '<option value="">Tutti gli ingressi</option>' + cableOptionMarkup(inputs.map(cableById), '');
+  const selectedSupply = nodeById(state.selected)?.type === 'supply' ? nodeById(state.selected) : pageNodes().find((node) => node.type === 'supply' && !state.links.some((link) => !isReferenceLink(link) && link.from === node.id));
+  if (selectedSupply) $('#panel-input-filter').value = inputs.find((input) => input === selectedSupply.supplyType) || inputs.find((input) => connectorCanFeedInput(selectedSupply.supplyType, input)) || '';
+  updatePanelMatricolaChoices();
+  $('#panel-dialog').showModal();
+  $('#panel-search').focus();
 }
 function updatePanelChoiceDetails() {
-  const model = state.library.find((row) => row.matricola === $('#panel-choice').value), mode = $('#panel-mode'), modeRow = $('#panel-mode-row'), alternatives = model?.alternatives || [];
-  modeRow.hidden = !alternatives.length; mode.innerHTML = `<option value="cee">Prese CEE</option>${alternatives.map((item) => `<option value="${item.id}">${item.label}</option>`).join('')}`;
-  const ports = selectedPanelPorts(model || { ports: [] }); $('#panel-choice-details').textContent = `${cableById(model?.inputType).name} in ingresso · ${ports.map((port) => `${port.quantity}× ${cableById(port.type).name}`).join(', ')}`;
+  const model = PANEL_LIBRARY.find((row) => row.matricola === $('#panel-choice').value);
+  $('#confirm-panel').disabled = !model || isPanelMatricolaUsed(model.matricola);
+  $('#panel-choice-details').textContent = model ? `Selezionato ${model.matricola} · ${cableById(model.inputType).name} in ingresso` : 'Nessuna matricola disponibile con questi filtri.';
+  $('#panel-results').querySelectorAll('.catalog-card').forEach((card) => card.classList.toggle('chosen', card.querySelector('[data-choose-panel]').dataset.choosePanel === model?.matricola));
 }
-function updatePanelModeDetails() { const model = state.library.find((row) => row.matricola === $('#panel-choice').value); const ports = selectedPanelPorts(model || { ports: [] }); $('#panel-choice-details').textContent = `${cableById(model?.inputType).name} in ingresso · ${ports.map((port) => `${port.quantity}× ${cableById(port.type).name}`).join(', ')}`; }
 function refreshLinkDialog() {
   const source = nodeById($('#link-from').value);
   const targets = pageNodes().filter((node) => {
@@ -1063,17 +1272,23 @@ function refreshLinkDialog() {
 }
 function showLinkDialog() {
   const sources = pageNodes().filter((node) => ['supply', 'panel'].includes(node.type));
-  if (!sources.length) return showStatus('Aggiungi prima una fornitura o un quadro.');
+  if (!sources.length) return showStatus('Aggiungi prima una fornitura o un quadro.', 'warning');
   $('#link-from').innerHTML = sources.map((node) => `<option value="${node.id}">${esc(node.title)}</option>`).join('');
   refreshLinkDialog();
-  if (!$('#link-to').options.length) return showStatus('Non ci sono destinazioni compatibili e libere in questa pagina.');
+  if (!$('#link-to').options.length) return showStatus('Non ci sono destinazioni compatibili e libere in questa pagina.', 'warning');
   $('#link-dialog').showModal();
 }
 function save() {
   const issues = projectIssues();
-  if (issues.length) return showStatus(`Salvataggio bloccato: ${issues[0].message}`);
+  if (issues.length) return showStatus(`Salvataggio bloccato: ${issues[0].message}`, 'error');
   const blob = new Blob([JSON.stringify(serializableProject(), null, 2)], { type: 'application/json' }), filename = [state.meta.name || 'unifilare', state.meta.revision].filter(Boolean).join(' ').replace(/[^\w]+/g, '-').toLowerCase(), url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${filename}.json`; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); markSaved(); showStatus('Progetto salvato.');
+  const anchor = document.createElement('a');
+  anchor.href = url; anchor.download = `${filename}.json`; anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  markSaved(); showStatus('File progetto esportato.', 'success');
 }
 function coverMarkup() {
   const company = [state.meta.company, state.meta.companyAddress, state.meta.companyVat ? `P. IVA ${state.meta.companyVat}` : ''].filter(Boolean).join('\n');
@@ -1093,7 +1308,7 @@ function phaseReportMarkup(page, total) {
     const phase = summary.phases[name], width = phase.watts > 0 ? Math.max(2, phase.watts / maximumWatts * 100) : 0;
     return `<div class="phase-report-row phase-report-${name.toLowerCase()}"><span class="phase-report-badge">${name}</span><div class="phase-report-track"><span style="width:${width.toFixed(2)}%"></span></div><strong>${formatPhasePower(phase.watts)}</strong><strong>${phase.amps.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} A</strong></div>`;
   }).join('');
-  return `<article class="phase-report-sheet" data-print-page="${page}"><div class="phase-report-heading">Bilancio carichi per fase</div><main class="phase-report-content"><section class="phase-report-total"><span>Potenza totale assegnata</span><strong>${formatPhasePower(totalWatts)}</strong></section><div class="phase-report-grid"><section><h2>Ripartizione sulle tre fasi</h2><div class="phase-report-columns" aria-hidden="true"><span>Fase</span><span>Carico relativo</span><span>Potenza</span><span>Corrente</span></div>${rows}</section><aside class="phase-report-details"><h2>Sbilanciamento</h2><div><span>Differenza massima</span><strong>${formatPhasePower(wattDifference)} - ${ampDifference.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} A</strong></div><div><span>Scostamento dal valore medio</span><strong>${deviation.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</strong></div><div><span>Media per fase</span><strong>${formatPhasePower(averageWatts)}</strong></div></aside></div></main><p class="phase-report-note">Calcolo indicativo: 230 V monofase, 400 V trifase, cos φ = 1. I carichi trifase sono ripartiti in parti uguali su R, S e T.</p>${titleBlockMarkup(page, total)}</article>`;
+  return `<article class="phase-report-sheet" data-print-page="${page}"><div class="phase-report-heading">Bilancio carichi per fase</div><div class="phase-report-content"><section class="phase-report-total"><span>Potenza totale assegnata</span><strong>${formatPhasePower(totalWatts)}</strong></section><div class="phase-report-grid"><section><h2>Ripartizione sulle tre fasi</h2><div class="phase-report-columns" aria-hidden="true"><span>Fase</span><span>Carico relativo</span><span>Potenza</span><span>Corrente</span></div>${rows}</section><aside class="phase-report-details"><h2>Sbilanciamento</h2><div><span>Differenza massima</span><strong>${formatPhasePower(wattDifference)} - ${ampDifference.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} A</strong></div><div><span>Scostamento dal valore medio</span><strong>${deviation.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</strong></div><div><span>Media per fase</span><strong>${formatPhasePower(averageWatts)}</strong></div></aside></div></div><p class="phase-report-note">Calcolo indicativo: 230 V monofase, 400 V trifase, cos φ = 1. I carichi trifase sono ripartiti in parti uguali su R, S e T.</p>${titleBlockMarkup(page, total)}</article>`;
 }
 function splitIntoPages(items, size) { return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size)); }
 function topologyNodeKey(node) {
@@ -1146,31 +1361,74 @@ function indexMarkup(entries, indexPage, total, diagramOffset, diagramPages) {
   }).join('');
   return `<article class="drawing-sheet index-sheet" data-print-page="${indexPage}"><div class="drawing-title">Schema unifilare di distribuzione elettrica</div><svg class="index-diagram" viewBox="0 0 1200 780" aria-label="Indice schemi per fornitura"><defs><marker id="index-arrow-${indexPage}" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#1c1c1c"/></marker></defs>${rows}</svg>${titleBlockMarkup(indexPage, total)}</article>`;
 }
-async function preparePrint() {
+let printSession = null;
+function buildPrintPages() {
+  if (printSession) return true;
   const issues = projectIssues();
-  if (issues.length) return showStatus(`Esportazione bloccata: ${issues[0].message}`);
-  const currentPage = state.currentPage, printPages = $('#print-pages'), candidatePages = [...new Set([...(state.pages || []), ...state.nodes.map((node) => node.page)])].sort((first, second) => first - second), diagramPages = candidatePages.filter((page) => state.nodes.some((node) => node.page === page)), exportedPages = diagramPages.length ? diagramPages : [1], hasIndex = exportedPages.length > 1, topology = indexTopology(exportedPages), indexEntries = hasIndex ? indexSupplyEntries(exportedPages, topology) : [], indexGroups = splitIntoPages(indexEntries, 8), pageOffset = 1 + indexGroups.length, totalPages = exportedPages.length + pageOffset + 1, previousTitle = document.title;
-  document.body.classList.remove('preparing-print'); printPages.replaceChildren();
-  printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, index + 2, totalPages, pageOffset, exportedPages)).join('');
-  printPageNumbers = new Map(exportedPages.map((page, index) => [page, index + pageOffset + 1]));
-  exportedPages.forEach((page, index) => { const printPage = index + pageOffset + 1; state.currentPage = page; render(); const sheet = $('#drawing-sheet').cloneNode(true); sheet.removeAttribute('id'); sheet.classList.add('print-sheet'); sheet.dataset.sourcePage = page; sheet.dataset.printPage = printPage; sheet.querySelector('#block-page').textContent = `Pagina ${printPage} di ${totalPages}`; printPages.append(sheet); });
-  printPages.insertAdjacentHTML('beforeend', phaseReportMarkup(totalPages, totalPages));
-  printPageNumbers = null; state.currentPage = currentPage; render();
-  const renderedPages = [...printPages.children].map((sheet) => Number(sheet.dataset.printPage)), expectedPages = Array.from({ length: totalPages }, (_, index) => index + 1);
-  if (renderedPages.length !== totalPages || renderedPages.some((page, index) => page !== expectedPages[index])) { printPages.replaceChildren(); showStatus(`Export interrotto: preparate ${renderedPages.length} pagine su ${totalPages}. Riprova dopo aver salvato e riaperto il progetto.`); return; }
-  document.title = `Unifilare ${state.meta.name || 'Progetto'} ${state.meta.revision || ''}`.trim(); document.body.classList.add('preparing-print');
-  if (document.fonts?.ready) await document.fonts.ready;
-  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  let printFinished = false;
-  const finishPrint = () => {
-    if (printFinished) return;
-    printFinished = true; document.title = previousTitle; document.body.classList.remove('preparing-print'); printPages.replaceChildren();
-    window.removeEventListener('focus', finishAfterFocus); showStatus(`PDF preparato: ${totalPages} pagine totali, di cui ${exportedPages.length} schemi e 1 riepilogo carichi.`);
-  };
-  const finishAfterFocus = () => setTimeout(finishPrint, 0);
-  window.addEventListener('afterprint', finishPrint, { once: true }); window.addEventListener('focus', finishAfterFocus, { once: true });
-  window.print();
-  setTimeout(finishPrint, 0);
+  if (issues.length) { showStatus(`Esportazione bloccata: ${issues[0].message}`, 'error'); return false; }
+  const currentPage = state.currentPage, printPages = $('#print-pages');
+  const diagramPages = sortedPages().filter((page) => state.nodes.some((node) => node.page === page));
+  const exportedPages = diagramPages.length ? diagramPages : [1];
+  const indexEntries = exportedPages.length > 1 ? indexSupplyEntries(exportedPages, indexTopology(exportedPages)) : [];
+  const indexGroups = splitIntoPages(indexEntries, 8), pageOffset = 1 + indexGroups.length;
+  const totalPages = exportedPages.length + pageOffset + 1;
+  printSession = { previousTitle: document.title, totalPages, diagrams: exportedPages.length };
+  $('#print-project').disabled = true;
+  try {
+    printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, index + 2, totalPages, pageOffset, exportedPages)).join('');
+    printPageNumbers = new Map(exportedPages.map((page, index) => [page, index + pageOffset + 1]));
+    exportedPages.forEach((page, index) => {
+      const printPage = index + pageOffset + 1;
+      state.currentPage = page;
+      render();
+      const sheet = $('#drawing-sheet').cloneNode(true);
+      sheet.dataset.sourcePage = page;
+      sheet.dataset.printPage = printPage;
+      sheet.querySelector('#block-page').textContent = `Pagina ${printPage} di ${totalPages}`;
+      // Ogni SVG stampato deve riferirsi al proprio marker, con un ID univoco.
+      sheet.querySelector('#arrow').id = `print-arrow-${printPage}`;
+      sheet.querySelectorAll('.connector').forEach((path) => path.setAttribute('marker-end', `url(#print-arrow-${printPage})`));
+      sheet.querySelectorAll('.selected').forEach((element) => element.classList.remove('selected'));
+      sheet.querySelectorAll('.alignment-guide, .route-handle, .link-handle, .connector-hit').forEach((element) => element.remove());
+      sheet.querySelectorAll('[tabindex]').forEach((element) => { element.removeAttribute('tabindex'); element.removeAttribute('role'); });
+      sheet.removeAttribute('id');
+      sheet.querySelectorAll('[id]:not(marker)').forEach((element) => element.removeAttribute('id'));
+      printPages.append(sheet);
+    });
+    printPages.insertAdjacentHTML('beforeend', phaseReportMarkup(totalPages, totalPages));
+    const renderedPages = [...printPages.children];
+    if (renderedPages.length !== totalPages || renderedPages.some((sheet, index) => Number(sheet.dataset.printPage) !== index + 1)) {
+      throw new Error('La numerazione delle pagine non è completa.');
+    }
+    document.title = `Unifilare ${state.meta.name || 'Progetto'} ${state.meta.revision || ''}`.trim();
+    document.body.classList.add('preparing-print');
+    return true;
+  } catch (error) {
+    finishPrint(false);
+    showStatus(`Esportazione non riuscita: ${error.message}`, 'error');
+    return false;
+  } finally {
+    printPageNumbers = null;
+    state.currentPage = currentPage;
+    render();
+  }
+}
+function finishPrint(notify = true) {
+  if (!printSession) return;
+  const { previousTitle, totalPages, diagrams } = printSession;
+  printSession = null;
+  document.title = previousTitle;
+  document.body.classList.remove('preparing-print');
+  $('#print-pages').replaceChildren();
+  $('#print-project').disabled = false;
+  if (notify) showStatus(`Documento preparato: ${totalPages} pagine totali, di cui ${diagrams} schemi e 1 riepilogo carichi.`, 'success');
+}
+function preparePrint() {
+  if (printSession || !buildPrintPages()) return;
+  try { window.print(); }
+  catch (error) { finishPrint(false); showStatus(`Stampa non disponibile: ${error.message}`, 'error'); }
+  // Safari può restituire il controllo prima della chiusura della stampa.
+  // Le pagine vengono rimosse solo all'evento afterprint.
 }
 function svgPoint(event) { const svg = $('#diagram'), point = svg.createSVGPoint(); point.x = event.clientX; point.y = event.clientY; return point.matrixTransform(svg.getScreenCTM().inverse()); }
 function snapToAlignmentGuides(node, references) {
@@ -1179,19 +1437,43 @@ function snapToAlignmentGuides(node, references) {
   if (guideX !== undefined && Math.abs(guideX - node.x) <= threshold) { node.x = guideX; alignmentGuides.push({ axis: 'x', value: guideX }); }
   if (guideY !== undefined && Math.abs(guideY - node.y) <= threshold) { node.y = guideY; alignmentGuides.push({ axis: 'y', value: guideY }); }
 }
+// La cattura resta sull'SVG, che non viene sostituito durante il rendering.
+function trackDiagramPointer(event, onMove, onFinish) {
+  const svg = $('#diagram'), pointerId = event.pointerId;
+  const move = (next) => { if (next.pointerId === pointerId) onMove(next); };
+  const finish = (next, cancelled = false) => {
+    if (next.pointerId !== undefined && next.pointerId !== pointerId) return;
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', cancel);
+    window.removeEventListener('blur', cancel);
+    svg.removeEventListener('lostpointercapture', cancel);
+    if (svg.hasPointerCapture(pointerId)) svg.releasePointerCapture(pointerId);
+    onFinish(next, cancelled);
+  };
+  const up = (next) => finish(next);
+  const cancel = (next) => finish(next, true);
+  svg.setPointerCapture(pointerId);
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', cancel);
+  window.addEventListener('blur', cancel);
+  svg.addEventListener('lostpointercapture', cancel);
+}
 function beginRouteSegmentDrag(event, handle) {
   const link = linkById(handle.dataset.linkId), from = nodeById(link?.from), to = nodeById(link?.to);
   if (!link || !from || !to || link.socapexGroup) return;
-  event.preventDefault(); event.stopPropagation();
-  const nodeIndex = new Map(state.nodes.map((node) => [node.id, node])), basePoints = linkRoutePoints(link, from, to, nodeIndex).map((point) => ({ ...point }));
+  const nodeIndex = new Map(state.nodes.map((node) => [node.id, node]));
+  const basePoints = linkRoutePoints(link, from, to, nodeIndex).map((point) => ({ ...point }));
   const segmentIndex = Number(handle.dataset.segmentIndex), vertical = handle.dataset.orientation === 'vertical', start = svgPoint(event);
   if (!Number.isInteger(segmentIndex) || segmentIndex < 1 || segmentIndex >= basePoints.length - 2) return;
   checkpoint(`move-link-route-${link.id}`);
   state.selectedLink = link.id; state.selected = null; state.selectedIds = [];
   let moved = false;
-  const move = (next) => {
-    const point = svgPoint(next), delta = vertical ? point.x - start.x : point.y - start.y, updated = basePoints.map((item) => ({ ...item }));
+  trackDiagramPointer(event, (next) => {
+    const point = svgPoint(next), delta = vertical ? point.x - start.x : point.y - start.y;
     if (Math.abs(delta) < .5) return;
+    const updated = basePoints.map((item) => ({ ...item }));
     moved = true;
     if (vertical) {
       const x = Math.max(20, Math.min(1180, basePoints[segmentIndex].x + delta));
@@ -1202,55 +1484,124 @@ function beginRouteSegmentDrag(event, handle) {
     }
     link.routePoints = updated.slice(1, -1);
     requestRender();
-  };
-  const stop = () => {
+  }, () => {
     if (moved) markChanged('Percorso della linea aggiornato.'); else dropNoopHistory();
-    window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); render();
-  };
-  window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop);
+    render();
+  });
 }
 function bindDiagram() {
   $('#diagram').addEventListener('pointerdown', (event) => {
-    const routeHandle = event.target.closest('.route-handle'); const handle = event.target.closest('.link-handle'); const labelGroup = event.target.closest('.link-label'); const linkGroup = event.target.closest('.link'); const nodeGroup = event.target.closest('.node');
+    if (!event.isPrimary || event.button !== 0 || printSession) return;
+    const routeHandle = event.target.closest('.route-handle'), handle = event.target.closest('.link-handle');
+    const labelGroup = event.target.closest('.link-label'), linkGroup = event.target.closest('.link'), nodeGroup = event.target.closest('.node');
+    // Sullo sfondo i gesti touch restano disponibili per scorrere il foglio.
+    if (event.pointerType === 'touch' && !routeHandle && !handle && !labelGroup && !linkGroup && !nodeGroup) return;
+    event.preventDefault();
     if (routeHandle) { beginRouteSegmentDrag(event, routeHandle); return; }
     if (handle) {
-      event.stopPropagation(); const source = handle.dataset.source, svg = $('#diagram'), from = nodeById(source), draft = document.createElementNS('http://www.w3.org/2000/svg', 'path'); draft.setAttribute('class', 'connector'); draft.setAttribute('id', 'link-draft'); draft.setAttribute('d', `M${from.x + NODE_HALF},${from.y} L${from.x + NODE_HALF},${from.y}`); svg.append(draft);
-      const move = (next) => { const point = svgPoint(next); draft.setAttribute('d', `M${from.x + NODE_HALF},${from.y} L${point.x},${point.y}`); };
-      const stop = (next) => { draft.remove(); const target = document.elementFromPoint(next.clientX, next.clientY)?.closest('.node')?.dataset.id; if (target && target !== source && !state.links.some((link) => link.from === source && link.to === target)) tryAddLink(source, target, requiredPlug(nodeById(target)) || (from.type === 'supply' ? from.supplyType : 'cee16mono'), 20); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); render(); };
-      window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); return;
+      const source = handle.dataset.source, svg = $('#diagram'), from = nodeById(source);
+      const draft = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      draft.setAttribute('class', 'connector');
+      draft.setAttribute('d', `M${from.x + NODE_HALF},${from.y} L${from.x + NODE_HALF},${from.y}`);
+      svg.append(draft);
+      trackDiagramPointer(event, (next) => {
+        const point = svgPoint(next);
+        draft.setAttribute('d', `M${from.x + NODE_HALF},${from.y} L${point.x},${point.y}`);
+      }, (next, cancelled) => {
+        draft.remove();
+        const target = !cancelled && document.elementFromPoint(next.clientX, next.clientY)?.closest('.node')?.dataset.id;
+        if (target && target !== source && !state.links.some((link) => link.from === source && link.to === target)) {
+          tryAddLink(source, target, requiredPlug(nodeById(target)) || from.supplyType || 'cee16mono', 20);
+        }
+        render();
+      });
+      return;
     }
     if (labelGroup) {
-      const link = linkById(labelGroup.dataset.linkId), from = nodeById(link.from), to = nodeById(link.to), current = linkLabelPosition(link, from, to), start = svgPoint(event), offset = { x: start.x - current.x, y: start.y - current.y };
-      let moved = false; checkpoint('move-link-label');
+      const link = linkById(labelGroup.dataset.linkId), from = nodeById(link.from), to = nodeById(link.to);
+      checkpoint('move-link-label');
       state.selectedLink = link.id; state.selected = null; state.selectedIds = [];
-      const move = (next) => { moved = true; const point = svgPoint(next); link.labelX = Math.max(10, Math.min(875, point.x - offset.x)); link.labelY = Math.max(22, Math.min(720, point.y - offset.y)); requestRender(); };
-      const stop = () => { if (moved) markChanged(); else dropNoopHistory(); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); render(); return;
+      render();
+      const current = linkLabelPosition(link, from, to), start = svgPoint(event);
+      const offset = { x: start.x - current.x, y: start.y - current.y };
+      let moved = false;
+      trackDiagramPointer(event, (next) => {
+        moved = true;
+        const point = svgPoint(next);
+        link.labelX = Math.max(10, Math.min(875, point.x - offset.x));
+        link.labelY = Math.max(22, Math.min(720, point.y - offset.y));
+        requestRender();
+      }, () => { if (moved) markChanged(); else dropNoopHistory(); render(); });
+      render();
+      return;
     }
-    if (linkGroup) { state.selectedLink = linkGroup.dataset.linkId; state.selected = null; state.selectedIds = []; render(); return; }
+    if (linkGroup) {
+      state.selectedLink = linkGroup.dataset.linkId; state.selected = null; state.selectedIds = [];
+      render();
+      return;
+    }
     if (!nodeGroup) {
-      const svg = $('#diagram'), start = svgPoint(event), box = document.createElementNS('http://www.w3.org/2000/svg', 'rect'), additive = event.shiftKey || event.metaKey || event.ctrlKey;
-      box.setAttribute('class', 'selection-box'); svg.append(box);
-      const move = (next) => { const point = svgPoint(next), x = Math.min(start.x, point.x), y = Math.min(start.y, point.y); box.setAttribute('x', x); box.setAttribute('y', y); box.setAttribute('width', Math.abs(point.x - start.x)); box.setAttribute('height', Math.abs(point.y - start.y)); };
-      const stop = (next) => { const point = svgPoint(next), minX = Math.min(start.x, point.x), maxX = Math.max(start.x, point.x), minY = Math.min(start.y, point.y), maxY = Math.max(start.y, point.y), inside = pageNodes().filter((item) => item.x >= minX && item.x <= maxX && item.y >= minY && item.y <= maxY).map((item) => item.id); box.remove(); state.selectedIds = additive ? [...new Set([...state.selectedIds, ...inside])] : inside; state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); render(); };
-      window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); return;
+      const svg = $('#diagram'), start = svgPoint(event), box = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+      box.setAttribute('class', 'selection-box');
+      box.setAttribute('pointer-events', 'none');
+      svg.append(box);
+      trackDiagramPointer(event, (next) => {
+        const point = svgPoint(next), x = Math.min(start.x, point.x), y = Math.min(start.y, point.y);
+        box.setAttribute('x', x); box.setAttribute('y', y);
+        box.setAttribute('width', Math.abs(point.x - start.x)); box.setAttribute('height', Math.abs(point.y - start.y));
+      }, (next, cancelled) => {
+        box.remove();
+        if (!cancelled) {
+          const point = svgPoint(next), minX = Math.min(start.x, point.x), maxX = Math.max(start.x, point.x);
+          const minY = Math.min(start.y, point.y), maxY = Math.max(start.y, point.y);
+          const inside = pageNodes().filter((item) => item.x >= minX && item.x <= maxX && item.y >= minY && item.y <= maxY).map((item) => item.id);
+          state.selectedIds = additive ? [...new Set([...state.selectedIds, ...inside])] : inside;
+          state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null;
+        }
+        render();
+      });
+      return;
     }
     const nodeId = nodeGroup.dataset.id, additive = event.shiftKey || event.metaKey || event.ctrlKey;
     if (additive) { selectNode(nodeId, true); render(); return; }
-    if (!state.selectedIds.includes(nodeId)) selectNode(nodeId); else { state.selected = nodeId; state.selectedLink = null; }
-    const node = nodeById(nodeId), start = svgPoint(event), positions = selectedNodes().map((item) => ({ node: item, x: item.x, y: item.y })), references = pageNodes().filter((item) => !state.selectedIds.includes(item.id)); let moved = false; checkpoint('move-nodes');
-    const move = (next) => { moved = true; const point = svgPoint(next), dx = point.x - start.x, dy = point.y - start.y; alignmentGuides = []; positions.forEach(({ node: item, x, y }) => { item.x = Math.max(85, Math.min(1115, x + dx)); item.y = Math.max(40, Math.min(740, y + dy)); snapToAlignmentGuides(item, references); }); alignmentGuides = alignmentGuides.filter((guide, index, guides) => guides.findIndex((item) => item.axis === guide.axis && item.value === guide.value) === index); requestRender(); };
-    const stop = () => { if (moved) markChanged(); else dropNoopHistory(); alignmentGuides = []; window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); render(); }; window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop); render();
+    if (!state.selectedIds.includes(nodeId)) selectNode(nodeId);
+    else { state.selected = nodeId; state.selectedLink = null; }
+    // L'ispettore può cambiare le dimensioni del foglio: misura dopo il layout.
+    render();
+    const start = svgPoint(event), positions = selectedNodes().map((item) => ({ node: item, x: item.x, y: item.y }));
+    const references = pageNodes().filter((item) => !state.selectedIds.includes(item.id));
+    let moved = false;
+    checkpoint('move-nodes');
+    trackDiagramPointer(event, (next) => {
+      const point = svgPoint(next), dx = point.x - start.x, dy = point.y - start.y;
+      if (!moved && Math.hypot(dx, dy) < 2) return;
+      moved = true;
+      alignmentGuides = [];
+      positions.forEach(({ node: item, x, y }) => {
+        item.x = Math.max(85, Math.min(1115, x + dx)); item.y = Math.max(40, Math.min(740, y + dy));
+        snapToAlignmentGuides(item, references);
+      });
+      alignmentGuides = alignmentGuides.filter((guide, index, guides) => guides.findIndex((item) => item.axis === guide.axis && item.value === guide.value) === index);
+      requestRender();
+    }, () => {
+      if (moved) markChanged(); else dropNoopHistory();
+      alignmentGuides = [];
+      render();
+    });
+    render();
   });
   $('#diagram').addEventListener('keydown', (event) => {
     const nodeGroup = event.target.closest('.node'), linkGroup = event.target.closest('.link');
-    if (['Enter', ' '].includes(event.key) && (nodeGroup || linkGroup)) {
+    if (!nodeGroup && !linkGroup) return;
+    if (['Enter', ' ', 'Delete', 'Backspace'].includes(event.key)) {
       event.preventDefault();
-      if (nodeGroup) selectNode(nodeGroup.dataset.id);
-      else { state.selectedLink = linkGroup.dataset.linkId; state.selected = null; state.selectedIds = []; }
-      render();
-    }
-    if (['Delete', 'Backspace'].includes(event.key) && (nodeGroup || linkGroup)) {
-      event.preventDefault(); deleteSelection();
+      event.stopPropagation();
+      if (nodeGroup) {
+        if (event.key === 'Enter' || event.key === ' ' || !state.selectedIds.includes(nodeGroup.dataset.id)) selectNode(nodeGroup.dataset.id);
+      } else { state.selectedLink = linkGroup.dataset.linkId; state.selected = null; state.selectedIds = []; }
+      if (['Delete', 'Backspace'].includes(event.key)) deleteSelection();
+      else render();
     }
   });
 }
@@ -1294,6 +1645,7 @@ function removeCurrentPage() {
   state.nodes = state.nodes.filter((node) => node.page !== removedPage);
   state.nodes.forEach((node) => { if (node.page > removedPage) node.page--; });
   state.pages = pages.filter((page) => page !== removedPage).map((page) => page > removedPage ? page - 1 : page);
+  state.pageNames = Object.fromEntries(Object.entries(state.pageNames || {}).filter(([key]) => Number(key) !== removedPage).map(([key, name]) => [Number(key) > removedPage ? Number(key) - 1 : key, name]));
   state.currentPage = Math.max(1, Math.min(removedPage, pagesCount()));
   state.selected = null; state.selectedIds = []; state.selectedLink = null; markChanged(`Pagina ${removedPage} eliminata.`); render();
 }
@@ -1302,6 +1654,7 @@ function createPageAfter(page, atEnd = false) {
   const newPage = afterPage + 1;
   checkpoint(atEnd ? 'append-page' : 'insert-page');
   if (afterPage < lastPage) {
+    state.pageNames = Object.fromEntries(Object.entries(state.pageNames || {}).map(([key, name]) => [Number(key) > afterPage ? Number(key) + 1 : key, name]));
     state.nodes.forEach((node) => { if (node.page > afterPage) node.page++; });
     state.pages = pages.map((item) => item > afterPage ? item + 1 : item);
   } else state.pages = [...pages];
@@ -1313,11 +1666,51 @@ function createPageAfter(page, atEnd = false) {
 function togglePanel(element, button, open) {
   element.classList.toggle('open', open);
   button.setAttribute('aria-expanded', String(open));
+  const concealed = window.matchMedia('(max-width: 760px)').matches && !open;
+  element.inert = concealed;
+  if (concealed) element.setAttribute('aria-hidden', 'true'); else element.removeAttribute('aria-hidden');
 }
 function bind() {
+  canvasViewport = window.UnifilariViewport({ container: $('#sheet-wrapper'), stage: $('#sheet-stage'), zoomSelect: $('#zoom-level'), readout: $('#zoom-readout'), panButton: $('#pan-tool'), zoomIn: $('#zoom-in'), zoomOut: $('#zoom-out'), fitButton: $('#fit-sheet') });
+  document.addEventListener('click', (event) => {
+    const start = event.target.closest('[data-start-action]');
+    if (start) runStartAction(start.dataset.startAction);
+  });
+  $('#selection-toolbar').onclick = (event) => {
+    const button = event.target.closest('[data-selection-action]');
+    if (!button || button.disabled) return;
+    const actions = { connect: openBulkConnectDialog, arrange: openArrangeDialog, align: openAlignDialog, duplicate: duplicateSelectedLoads, delete: deleteSelection };
+    actions[button.dataset.selectionAction]?.();
+  };
+  $('#show-issues').onclick = () => { $('#issues-dialog').showModal(); renderDiagnostics(); };
+  $('#issues-list').onclick = (event) => { const button = event.target.closest('[data-issue-index]'); if (button) goToIssue(Number(button.dataset.issueIndex)); };
+  $('#manage-pages').onclick = () => { $('#pages-dialog').showModal(); renderPageOverview(); };
+  $('#page-cards').onclick = (event) => {
+    const button = event.target.closest('[data-open-page]');
+    if (button) { $('#pages-dialog').close(); goToPage(Number(button.dataset.openPage)); }
+  };
+  $('#page-cards').addEventListener('change', (event) => { if (event.target.dataset.pageName) renamePage(Number(event.target.dataset.pageName), event.target.value); });
+  $('#page-cards').addEventListener('keydown', (event) => { if (event.key === 'Enter' && event.target.dataset.pageName) { event.preventDefault(); event.target.blur(); } });
+  $('#overview-add-page').onclick = () => { createPageAfter(state.currentPage, true); renderPageOverview(); };
+  loadCompanyBook();
+  $('#company-book').onchange = selectCompanyFromBook;
+  $('#save-company').onclick = saveCompanyToBook;
+  $('#remove-company').onclick = removeCompanyFromBook;
+  document.querySelectorAll('[data-file-input]').forEach((button) => {
+    button.addEventListener('click', () => document.getElementById(button.dataset.fileInput).click());
+  });
+  document.querySelectorAll('dialog').forEach((dialog) => {
+    const heading = dialog.querySelector('h2');
+    heading.id ||= `${dialog.id}-title`;
+    dialog.setAttribute('aria-labelledby', heading.id);
+    dialog.addEventListener('close', () => {
+      dialog.querySelector('.dialog-status')?.remove();
+      if (dialog.id === 'project-dialog') resetProjectLocationSearch();
+    });
+  });
   $('#edit-project').onclick = () => openProjectDialog('edit');
   $('#project-dialog-form').addEventListener('submit', (event) => { event.preventDefault(); confirmProjectProperties(); });
-  $('#cancel-project').onclick = () => { projectLocationController?.abort(); $('#project-dialog').close(); };
+  $('#cancel-project').onclick = () => $('#project-dialog').close();
   $('#search-project-location').onclick = searchProjectLocation;
   $('#project-location-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); searchProjectLocation(); } });
   $('#project-location-results').onclick = (event) => { const button = event.target.closest('[data-location-index]'); if (button) selectProjectLocation(Number(button.dataset.locationIndex)); };
@@ -1328,7 +1721,7 @@ function bind() {
   $('#add-panel').onclick = openPanelDialog;
   $('#reuse-link').onclick = openLinkReferenceDialog;
   $('#confirm-link-reference').onclick = (event) => { event.preventDefault(); addLinkReference(); };
-  $('#add-temp-panel').onclick = openTemporaryPanelDialog;
+  $('#add-temp-panel').onclick = () => openTemporaryPanelDialog();
   $('#group-socapex').onclick = openSocapexDialog;
   $('#add-load').onclick = () => addNode('load');
   $('#add-bulk-loads').onclick = openBulkLoadDialog;
@@ -1337,10 +1730,19 @@ function bind() {
   $('#connect-selected').onclick = openBulkConnectDialog;
   $('#arrange-selected').onclick = openArrangeDialog;
   $('#align-selected').onclick = openAlignDialog;
+  $('#distribute-vertical').onclick = () => distributeSelectedNodes('y');
+  $('#distribute-horizontal').onclick = () => distributeSelectedNodes('x');
   $('#confirm-align').onclick = (event) => { event.preventDefault(); alignSelectedNodes(); };
   $('#panel-type').onchange = updatePanelMatricolaChoices;
+  $('#panel-search').oninput = updatePanelMatricolaChoices;
+  $('#panel-search').onkeydown = (event) => { if (event.key === 'Enter') { event.preventDefault(); $('#panel-choice').focus(); } };
+  $('#panel-input-filter').onchange = updatePanelMatricolaChoices;
+  $('#panel-include-used').onchange = updatePanelMatricolaChoices;
+  $('#panel-results').onclick = (event) => {
+    const button = event.target.closest('[data-choose-panel]');
+    if (button && !button.disabled) { $('#panel-choice').value = button.dataset.choosePanel; updatePanelChoiceDetails(); }
+  };
   $('#panel-choice').onchange = updatePanelChoiceDetails;
-  $('#panel-mode').onchange = updatePanelModeDetails;
   $('#confirm-panel').onclick = (event) => { event.preventDefault(); addPanelFromLibrary($('#panel-choice').value); };
 
   $('#add-temporary-port').onclick = () => { temporaryPorts.push({ type: 'cee16mono', quantity: 1 }); renderTemporaryPorts(); };
@@ -1357,7 +1759,6 @@ function bind() {
   $('#bulk-connect-select-all').onclick = () => document.querySelectorAll('[data-bulk-connect-load]').forEach((input) => { input.checked = true; });
   $('#bulk-connect-select-none').onclick = () => document.querySelectorAll('[data-bulk-connect-load]').forEach((input) => { input.checked = false; });
 
-  const goToPage = (page) => { state.currentPage = page; state.selected = null; state.selectedIds = []; state.selectedLink = null; render(); };
   $('#previous-page').onclick = () => { const pages = sortedPages(), index = pages.indexOf(state.currentPage); if (index > 0) goToPage(pages[index - 1]); };
   $('#next-page').onclick = () => { const pages = sortedPages(), index = pages.indexOf(state.currentPage); if (index >= 0 && index < pages.length - 1) goToPage(pages[index + 1]); };
   $('#page-select').onchange = (event) => goToPage(Number(event.target.value));
@@ -1369,7 +1770,7 @@ function bind() {
     const node = nodeById(state.selected), name = event.target.name;
     if (!node || !name || ['socket', 'manualSocket'].includes(name)) return;
     const pages = sortedPages(), value = ['page', 'watts'].includes(name) ? Number(event.target.value) : event.target.value;
-    if (name === 'page' && !pages.includes(value)) { event.target.value = node.page; return showStatus('Scegli una pagina esistente.'); }
+    if (name === 'page' && !pages.includes(value)) { event.target.value = node.page; return showStatus('Scegli una pagina esistente.', 'warning'); }
     checkpoint(`property-${node.id}-${name}`);
     const sharedFields = ['title', 'subtitle', 'details', 'note'];
     const sharedNodes = node.type === 'supply' && [...sharedFields, 'supplyType'].includes(name) ? supplyGroup(node) : node.type === 'panel' && sharedFields.includes(name) ? panelGroup(node) : [node];
@@ -1382,7 +1783,7 @@ function bind() {
       const issue = projectIssues().find((item) => { const link = linkById(item.linkId); return !link || affected.has(link.from) || affected.has(link.to); });
       if (issue) {
         before.forEach((entry) => { entry.item[name] = entry.value; entry.item.subtitle = entry.subtitle; entry.item.details = entry.details; });
-        dropNoopHistory(); showStatus(`Modifica annullata: ${issue.message}`); render(); return;
+        dropNoopHistory(); showStatus(`Modifica annullata: ${issue.message}`, 'error'); render(); return;
       }
     }
     if (name === 'page') state.currentPage = value;
@@ -1392,6 +1793,14 @@ function bind() {
   $('#property-form').addEventListener('change', (event) => {
     const link = linkById(state.selectedLink), node = nodeById(state.selected), name = event.target.name;
     if (link) {
+      if (['hideCableSection', 'hideLength'].includes(name)) {
+        checkpoint(`link-display-${link.id}-${name}`);
+        (link.socapexGroup ? socapexGroupLinks(link) : [link]).forEach((member) => {
+          if (event.target.checked) delete member[name];
+          else member[name] = true;
+        });
+        markChanged('Testo del collegamento aggiornato nello schema e nel PDF.'); render(); return;
+      }
       if (link.socapexGroup && name === 'socapexLength') {
         const length = Math.max(0, Number(event.target.value) || 0);
         checkpoint(`socapex-length-${link.socapexGroup}`);
@@ -1401,7 +1810,7 @@ function bind() {
       if (link.socapexGroup && name.startsWith('socapexSocket:')) {
         const member = linkById(name.slice('socapexSocket:'.length)), target = member && nodeById(member.to), source = member && nodeById(member.from);
         const proposed = event.target.value.trim().toUpperCase(), warning = socketWarning(source, target, proposed, member?.id);
-        if (!member || !target || warning) { showStatus(warning || 'Presa Socapex non disponibile.'); render(); return; }
+        if (!member || !target || warning) { showStatus(warning || 'Presa Socapex non disponibile.', 'error'); render(); return; }
         checkpoint(`socapex-socket-${member.id}`); target.socket = proposed;
         markChanged('Presa del Socapex aggiornata.'); render(); return;
       }
@@ -1418,19 +1827,20 @@ function bind() {
       const warning = isReferenceLink(link) ? '' : compatibilityWarning(nodeById(link.from), newTarget, link.id, link.cable);
       if (warning || (!isReferenceLink(link) && changesEndpoint && !assignFirstFreeSocket(nodeById(link.from), newTarget))) {
         Object.assign(link, before); if (oldTarget) oldTarget.socket = oldSocket; if (newTarget && newTarget !== oldTarget) newTarget.socket = newTargetSocket;
-        dropNoopHistory(); showStatus(warning || 'Modifica del collegamento non valida.'); render(); return;
+        dropNoopHistory(); showStatus(warning || 'Modifica del collegamento non valida.', 'error'); render(); return;
       }
       if (changesEndpoint) delete link.routePoints;
-      markChanged(); showStatus('Collegamento aggiornato.'); render(); return;
+      markChanged(); showStatus('Collegamento aggiornato.', 'success'); render(); return;
     }
     if (node && ['socket', 'manualSocket'].includes(name)) {
       const incoming = state.links.find((item) => item.to === node.id), source = incoming && nodeById(incoming.from), proposed = event.target.value.trim().toUpperCase(), warning = socketWarning(source, node, proposed, incoming?.id);
-      if (warning) { showStatus(warning); render(); return; }
-      checkpoint(`socket-${node.id}`); node.socket = proposed; markChanged(); showStatus('Presa aggiornata.'); render(); return;
+      if (warning) { showStatus(warning, 'error'); render(); return; }
+      checkpoint(`socket-${node.id}`); node.socket = proposed; markChanged(); showStatus('Presa aggiornata.', 'success'); render(); return;
     }
     if (node) { markChanged(); render(); }
   });
   $('#property-form').addEventListener('click', (event) => {
+    if (event.target.id === 'reassign-socapex-sockets') reassignSocapexSockets();
     if (event.target.id === 'add-link-detour') {
       const link = linkById(state.selectedLink); if (!link) return;
       checkpoint(`add-link-detour-${link.id}`);
@@ -1453,11 +1863,14 @@ function bind() {
   const importCaptureFile = async (event) => {
     const file = event.target.files[0]; if (!file) return;
     try { prepareCaptureImport(await file.text()); }
-    catch (error) { showStatus(`Importazione non riuscita: ${error.message}`); }
+    catch (error) { showStatus(`Importazione non riuscita: ${error.message}`, 'error'); }
     finally { event.target.value = ''; }
   };
   $('#capture-file').addEventListener('change', importCaptureFile);
   $('#welcome-new-project').onclick = createNewProject;
+  $('#restore-autosave').onclick = () => {
+    if (recoverableAutosave) applyLoadedProject(recoverableAutosave, { dirty: true, message: 'Lavoro recuperato. Esporta il progetto per conservarne una copia.' });
+  };
   $('#welcome-dialog').addEventListener('cancel', (event) => event.preventDefault());
   $('#capture-parent').onchange = updateCaptureSocapexAvailability;
   $('#confirm-capture-import').onclick = (event) => { event.preventDefault(); importSelectedCaptureGroups(); };
@@ -1476,9 +1889,10 @@ function bind() {
   $('#phase-supply-filter').onchange = (event) => { phaseSupplyFilter = event.target.value; renderPhaseSummary(); };
   const openProjectFile = async (event) => {
     const file = event.target.files[0]; if (!file) return;
-    if (dirty && !window.confirm('Aprire un altro progetto? Le modifiche correnti restano disponibili nel salvataggio automatico.')) { event.target.value = ''; return; }
+    if (dirty && !window.confirm('Aprire un altro progetto? Le modifiche correnti restano nel recupero automatico fino alla prossima modifica o esportazione.')) { event.target.value = ''; return; }
+    flushPendingAutosave();
     try { loadProjectText(await file.text()); }
-    catch (error) { showStatus(`Impossibile leggere il file: ${error.message}`); }
+    catch (error) { showStatus(`Impossibile leggere il file: ${error.message}`, 'error'); }
     finally { event.target.value = ''; }
   };
   $('#open-project').addEventListener('change', openProjectFile);
@@ -1487,6 +1901,10 @@ function bind() {
   $('#redo-action').onclick = redo;
 
   const sidebar = $('.sidebar');
+  const sidebarMedia = window.matchMedia('(max-width: 760px)');
+  const syncSidebar = () => togglePanel(sidebar, $('#toggle-sidebar'), sidebar.classList.contains('open'));
+  sidebarMedia.addEventListener('change', syncSidebar); syncSidebar();
+  $('.workspace').addEventListener('pointerdown', closeMobileSidebar, { capture: true });
   document.querySelectorAll('.sidebar-group-toggle').forEach((button) => {
     button.addEventListener('click', () => {
       const group = button.closest('.sidebar-group'), opening = !group.classList.contains('open');
@@ -1497,14 +1915,24 @@ function bind() {
   $('#toggle-sidebar').onclick = () => togglePanel(sidebar, $('#toggle-sidebar'), !sidebar.classList.contains('open'));
   $('#close-inspector').onclick = () => { state.selected = null; state.selectedIds = []; state.selectedLink = null; render(); };
   document.addEventListener('keydown', (event) => {
+    if (document.querySelector('dialog[open]')) return;
     const editable = ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName) || event.target.isContentEditable;
     if (editable) return;
+    if (event.key === 'Escape') { closeMobileSidebar(); canvasViewport.cancelPan(); state.selected = null; state.selectedIds = []; state.selectedLink = null; render(); }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && event.target.closest('#sheet-wrapper')) {
+      event.preventDefault(); state.selectedIds = pageNodes().map((node) => node.id); state.selected = state.selectedIds.at(-1) || null; state.selectedLink = null; render();
+    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); }
     if (['Delete', 'Backspace'].includes(event.key) && (state.selected || state.selectedLink)) { event.preventDefault(); deleteSelection(); }
   });
-  window.addEventListener('beforeunload', (event) => { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
+  window.addEventListener('beforeunload', (event) => { if (dirty) event.preventDefault(); });
+  window.addEventListener('pagehide', flushPendingAutosave);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushPendingAutosave(); });
+  window.addEventListener('beforeprint', buildPrintPages);
+  window.addEventListener('afterprint', () => finishPrint());
   bindDiagram();
 }
-bind(); syncMetaInputs(); savedProjectSnapshot = JSON.stringify(serializableProject()); render();
+bind(); fillProjectForm(state.meta); savedProjectSnapshot = JSON.stringify(serializableProject()); render();
+offerAutosaveRecovery();
 $('#welcome-dialog').showModal();

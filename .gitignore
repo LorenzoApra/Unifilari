@@ -1,2 +1,4 @@
-output/.DS_Store
-tmp/.DS_Store
+.DS_Store
+node_modules/
+test-results/
+playwright-report/
