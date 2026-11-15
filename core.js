@@ -149,11 +149,13 @@
       if (target?.type === 'panel' && !incomingByPanelKey.has(panelKey(target))) incomingByPanelKey.set(panelKey(target), link);
     });
     const selectedSupplyKey = asText(options.supplyKey).trim();
+    const selectedLoads = Array.isArray(options.loadIds) ? new Set(options.loadIds) : null;
     let connectedLoads = 0;
     let unassignedLoads = 0;
     let unassignedWatts = 0;
 
     (project.nodes || []).filter((node) => node.type === 'load').forEach((load) => {
+      if (selectedLoads && !selectedLoads.has(load.id)) return;
       const watts = Math.max(0, Number(load.watts) || 0);
       const incoming = incomingByTarget.get(load.id);
       const source = incoming ? nodeById(project, incoming.from, nodeIndex) : null;
@@ -188,6 +190,40 @@
     });
 
     return { phases, connectedLoads, unassignedLoads, unassignedWatts };
+  }
+
+  // Raggruppa le istanze su più pagine per alimentazione fisica. Un quadro
+  // residente senza fornitura esplicita rimane una radice autonoma dell'indice.
+  function distributionEntries(project) {
+    const nodes = project.nodes || [], nodeIndex = createNodeIndex(project);
+    const keyFor = (node) => node?.type === 'supply' ? `supply:${supplyKey(node)}` : node?.type === 'panel' ? `panel:${panelKey(node)}` : '';
+    const canonical = new Map(), parents = new Map(), incoming = new Map();
+    nodes.forEach((node) => { const key = keyFor(node); if (key && !canonical.has(key)) canonical.set(key, node); });
+    (project.links || []).filter((link) => !isReferenceLink(link)).forEach((link) => {
+      const from = nodeIndex.get(link.from), to = nodeIndex.get(link.to);
+      if (!incoming.has(link.to)) incoming.set(link.to, from);
+      if (to?.type === 'panel' && keyFor(from)) parents.set(keyFor(to), keyFor(from));
+    });
+    const rootFor = (node) => {
+      let key = keyFor(node);
+      const visited = new Set();
+      while (parents.has(key) && !visited.has(key)) { visited.add(key); key = parents.get(key); }
+      return key;
+    };
+    const groups = new Map();
+    const add = (rootKey, node, loadId = null) => {
+      if (!canonical.has(rootKey)) return;
+      if (!groups.has(rootKey)) groups.set(rootKey, { rootKey, node: canonical.get(rootKey), pages: new Set(), loadIds: [] });
+      const entry = groups.get(rootKey);
+      entry.pages.add(node.page);
+      if (loadId) entry.loadIds.push(loadId);
+    };
+    nodes.forEach((node) => {
+      if (keyFor(node)) add(rootFor(node), node);
+      else if (node.type === 'load' && incoming.get(node.id)?.type === 'panel') add(rootFor(incoming.get(node.id)), node, node.id);
+    });
+    return [...groups.values()].map((entry) => ({ ...entry, pages: [...entry.pages].sort((a, b) => a - b) }))
+      .sort((a, b) => a.pages[0] - b.pages[0] || (a.node.title || '').localeCompare(b.node.title || '', 'it', { numeric: true }));
   }
 
   function unconnectedLoadIds(project) {
@@ -696,6 +732,7 @@
     connectorCanFeedInput,
     createId,
     distributeNodes,
+    distributionEntries,
     isPowerLock,
     isReferenceLink,
     normalizeProject,

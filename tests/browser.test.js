@@ -127,7 +127,7 @@ test('stampa multipagina conservata fino ad afterprint, con ID SVG univoci', asy
   await expect(page.locator('.cover-sheet')).toBeVisible();
   const sheets = await page.locator('#print-pages > article').evaluateAll((elements) => elements.map((element) => ({ width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height })));
   sheets.forEach((sheet) => { expect(sheet.width).toBeCloseTo(1122.5, 0); expect(sheet.height).toBeCloseTo(793.7, 0); });
-  const note = await page.locator('.phase-report-note').boundingBox();
+  const note = await page.locator('.phase-report-note p').boundingBox();
   const reportFooter = await page.locator('.phase-report-sheet .title-block').boundingBox();
   expect(note.y + note.height).toBeLessThan(reportFooter.y - 5);
   await page.emulateMedia({ media: 'screen' });
@@ -540,4 +540,130 @@ test('descrizione del collegamento trascinabile con adattamento e proprietà ape
   await page.mouse.move(bounds.x + 52, bounds.y + 10, { steps: 6 });
   await page.mouse.up();
   expect(Number(await label.locator('.line-label').first().getAttribute('x'))).toBeCloseTo(original + 40 / scale, 0);
+});
+
+function printDistributionProject(count, longNames = false) {
+  const project = { version: 6, meta: { name: 'Riepilogo forniture', revision: '2.0', company: 'Ditta prova', companyAddress: 'Via Roma 1\n10100 Torino', companyVat: '01234567890', type: 'Allestimento Audio Luci' }, pages: [], nodes: [], links: [] };
+  for (let i = 1; i <= count; i++) {
+    project.pages.push(i);
+    const title = `Fornitura ${i}${longNames ? ' - '.repeat(2) + 'Distribuzione area spettacolo e servizi '.repeat(4) : ''}`;
+    project.nodes.push(
+      { id: `s${i}`, type: 'supply', supplyKey: `supply-${i}`, supplyType: 'cee63tri', title, page: i, x: 110, y: 100 },
+      { id: `p${i}`, type: 'panel', panelKey: `panel-${i}`, inputType: 'cee63tri', ports: [{ type: 'cee16mono', quantity: 3 }], title: `Quadro ${i}`, page: i, x: 450, y: 100 },
+      { id: `u${i}`, type: 'load', plugType: 'cee16mono', watts: 2300, socket: 'P1', title: `Utenza ${i}`, page: i, x: 900, y: 200 },
+    );
+    project.links.push({ id: `sp${i}`, from: `s${i}`, to: `p${i}`, cable: 'cee63tri', length: 0 }, { id: `pu${i}`, from: `p${i}`, to: `u${i}`, cable: 'cee16mono', length: 20 });
+  }
+  return project;
+}
+
+async function assertPrintLayout(page) {
+  await page.emulateMedia({ media: 'print' });
+  const problems = await page.locator('#print-pages > article').evaluateAll((sheets) => sheets.flatMap((sheet, index) => {
+    const errors = [], bounds = sheet.getBoundingClientRect();
+    if (Number(sheet.dataset.printPage) !== index + 1) errors.push(`Numerazione ${index + 1}`);
+    if (!sheet.classList.contains('print-sheet')) return errors;
+    const content = sheet.querySelector('.print-content').getBoundingClientRect();
+    sheet.querySelectorAll('.print-table tbody tr').forEach((row) => {
+      if (row.getBoundingClientRect().bottom > content.bottom + 1) errors.push(`Riga oltre il contenuto ${index + 1}`);
+    });
+    const footer = sheet.querySelector('.title-block').getBoundingClientRect();
+    if (footer.bottom > bounds.bottom || footer.top < content.bottom) errors.push(`Cartiglio ${index + 1}`);
+    sheet.querySelectorAll('a[href^="#print-page-"]').forEach((link) => {
+      if (!document.getElementById(link.hash.slice(1))) errors.push(`Destinazione ${link.hash}`);
+    });
+    return errors;
+  }));
+  expect(problems).toEqual([]);
+}
+
+test('riepilogo approvato con percentuali reali, sole potenze collegate e dettaglio multipagina', async ({ page }) => {
+  const project = sampleProject();
+  project.nodes.push({ id: 'excluded', type: 'load', title: 'UTENZA DA ESCLUDERE', plugType: 'cee16mono', watts: 50000, page: 1, x: 900, y: 600 });
+  await openProject(page, project);
+  await page.evaluate(() => { window.print = () => {}; });
+  await page.locator('#print-project').click();
+  const report = page.locator('.phase-report-sheet');
+  await expect(report).toHaveCount(1);
+  await expect(report.locator('h1')).toHaveText('Riepilogo carichi e distribuzione fasi');
+  await expect(report.locator('.phase-report-total > strong')).toHaveText('3,45 kW');
+  await expect(report.locator('.phase-share > strong')).toHaveText(['66,7%', '33,3%', '0,0%']);
+  expect(await report.locator('.phase-report-r .phase-report-track span').evaluate((el) => parseFloat(el.style.width))).toBeCloseTo(66.6667, 3);
+  await expect(report.locator('.supply-table tbody tr')).toHaveCount(1);
+  await expect(report.locator('.supply-table tbody td').first()).toHaveText('3,45 kW');
+  await expect(report.locator('.supply-table tbody td').last()).toHaveText('3-4');
+  expect(await report.innerText()).not.toMatch(/UTENZA DA ESCLUDERE|utenze|dati da completare|nota progetto/i);
+  await assertPrintLayout(page);
+});
+
+test('indice compatto con quindici alimentazioni, quadro residente e collegamenti rinumerati', async ({ page }) => {
+  const project = printDistributionProject(15);
+  project.nodes = project.nodes.filter((node) => node.id !== 's11');
+  project.links = project.links.filter((link) => link.id !== 'sp11');
+  project.nodes.find((node) => node.id === 'p11').title = 'Quadro Residente Cucina';
+  await openProject(page, project);
+  await page.evaluate(() => { window.print = () => {}; });
+  await page.locator('#print-project').click();
+  await expect(page.locator('.index-sheet')).toHaveCount(1);
+  await expect(page.locator('.index-table tbody tr')).toHaveCount(15);
+  await expect(page.locator('.index-table tr').filter({ hasText: 'Quadro Residente Cucina' })).toHaveCount(1);
+  await expect(page.locator('.index-table tbody tr').first().locator('td').last()).toHaveText('3');
+  await expect(page.locator('.index-table tbody tr').last().locator('td').last()).toHaveText('17');
+  await expect(page.locator('.phase-report-total > strong')).toHaveText('34,50 kW');
+  await expect(page.locator('.supply-table tbody tr')).toHaveCount(15);
+  await assertPrintLayout(page);
+});
+
+test('indice e dettagli lunghi continuano su più pagine senza tagli e con cartigli completi', async ({ page }) => {
+  const project = printDistributionProject(35, true);
+  project.meta.companyAddress = 'Indirizzo della ditta '.repeat(18);
+  project.meta.name = 'Evento con descrizione lunga '.repeat(6);
+  await openProject(page, project);
+  await page.evaluate(() => { window.print = () => {}; });
+  await page.locator('#print-project').click();
+  expect(await page.locator('.index-sheet').count()).toBeGreaterThan(1);
+  expect(await page.locator('.phase-report-sheet').count()).toBeGreaterThan(1);
+  await expect(page.locator('.index-table tbody tr')).toHaveCount(35);
+  await expect(page.locator('.supply-table tbody tr')).toHaveCount(35);
+  await expect(page.locator('.phase-report-total > strong')).toHaveText('80,50 kW');
+  const total = await page.locator('#print-pages > article').count();
+  await expect(page.locator('#print-pages > article').last().locator('.title-block')).toContainText(`Pagina ${total} di ${total}`);
+  await assertPrintLayout(page);
+  await page.emulateMedia({ media: 'screen' });
+  await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+  await expect(page.locator('#print-pages > article')).toHaveCount(0);
+  await expect(page.locator('#save-state')).toHaveText('Salvato');
+});
+
+test('stampa da tastiera senza carichi assegnati, indice delle pagine e riepilogo a zero', async ({ page }) => {
+  const project = { version: 6, meta: { name: 'Solo utenze libere' }, pages: [1, 2], nodes: [1, 2].map((n) => ({ id: `free-${n}`, type: 'load', title: `Nome escluso ${n}`, plugType: 'cee16mono', watts: 1000, page: n, x: 900, y: 250 })), links: [] };
+  await openProject(page, project);
+  await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+  await expect(page.locator('.index-table tbody tr')).toHaveCount(2);
+  await expect(page.locator('.phase-report-total > strong')).toHaveText('0,00 kW');
+  await expect(page.locator('.phase-share > strong')).toHaveText(['0,0%', '0,0%', '0,0%']);
+  await expect(page.locator('.supply-table')).toHaveCount(0);
+  expect(await page.locator('.phase-report-sheet').innerText()).not.toMatch(/Nome escluso|NaN|Infinity|utenze/i);
+  await assertPrintLayout(page);
+});
+
+test('richiami tra pagine rinumerati nel PDF senza modificare i numeri dell’editor', async ({ page }) => {
+  const project = sampleProject();
+  project.pages = [1, 2, 3];
+  project.nodes = project.nodes.filter((node) => node.id !== 'panel-reference');
+  project.nodes.filter((node) => node.type !== 'supply').forEach((node) => { node.page = 2; });
+  project.links.find((link) => link.id === 'panel-load-2').from = 'panel';
+  project.nodes.push({ id: 'free-on-third', type: 'load', plugType: 'cee16mono', watts: 500, title: 'Fuori riepilogo', page: 3, x: 900, y: 300 });
+  await openProject(page, project);
+  await expect(page.locator('#diagram .page-jump-text')).toHaveText('Pagina 2');
+  await page.evaluate(() => { window.print = () => {}; });
+  await page.locator('#print-project').click();
+  await expect(page.locator('#print-page-3 .page-jump-text')).toHaveText('Pagina 4');
+  await expect(page.locator('.index-table tbody tr').first().locator('td').last()).toHaveText('3-4');
+  await expect(page.locator('.index-table tbody tr').last().locator('td').last()).toHaveText('5');
+  await assertPrintLayout(page);
+  await page.emulateMedia({ media: 'screen' });
+  await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+  await expect(page.locator('#diagram .page-jump-text')).toHaveText('Pagina 2');
+  await expect(page.locator('#save-state')).toHaveText('Salvato');
 });

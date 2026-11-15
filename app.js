@@ -1298,68 +1298,88 @@ function coverMarkup() {
 function titleBlockMarkup(page, total) {
   return `<footer class="title-block"><div><small>Ditta esecutrice</small><strong>${esc(state.meta.company || '—')}</strong><span>${esc(state.meta.companyAddress || '—')}</span>${state.meta.companyVat ? `<span>P. IVA ${esc(state.meta.companyVat)}</span>` : ''}</div><div><small>Descrizione</small><strong>${esc(state.meta.type || '—')}</strong></div><div><small>Evento</small><strong>${esc(state.meta.name || '—')}</strong></div><div><small>Luogo</small><strong>${esc(state.meta.location || '—')}</strong></div><div><small>Versione</small><strong>${esc(state.meta.revision || '1.0')}</strong><small>Pagina ${page} di ${total}</small></div></footer>`;
 }
-function phaseReportMarkup(page, total) {
-  const summary = Core.calculatePhaseLoads(state), names = ['R', 'S', 'T'], values = names.map((name) => summary.phases[name]);
-  const totalWatts = values.reduce((sum, phase) => sum + phase.watts, 0), maximumWatts = Math.max(1, ...values.map((phase) => phase.watts));
-  const averageWatts = totalWatts / 3, wattDifference = Math.max(...values.map((phase) => phase.watts)) - Math.min(...values.map((phase) => phase.watts));
+function compactPageRanges(pages) {
+  const numbers = [...new Set(pages)].sort((a, b) => a - b), ranges = [];
+  for (let i = 0; i < numbers.length; i += 1) {
+    const first = numbers[i]; let last = first;
+    while (numbers[i + 1] === last + 1) last = numbers[++i];
+    ranges.push({ first, label: first === last ? String(first) : `${first}-${last}` });
+  }
+  return ranges;
+}
+function printedEntryRows(entries, pageNumbers) {
+  return entries.flatMap((entry) => {
+    const pages = entry.pages.map((page) => pageNumbers.get(page)).filter(Boolean), groups = [];
+    let group = [];
+    pages.forEach((page) => {
+      if (group.length && compactPageRanges([...group, page]).map((range) => range.label).join(', ').length > 44) {
+        groups.push(group); group = [];
+      }
+      group.push(page);
+    });
+    if (group.length) groups.push(group);
+    return groups.map((printedPages, index) => ({ ...entry, printedPages, continued: index > 0 }));
+  });
+}
+function printPageLinks(pages) {
+  return compactPageRanges(pages).map(({ first, label }) => `<a href="#print-page-${first}">${label}</a>`).join(', ');
+}
+function printSheetMarkup(className, title, page, total, content, note = '') {
+  const subtitle = [state.meta.name, state.meta.type].filter(Boolean).join(' · ');
+  return `<article class="print-sheet ${className}" id="print-page-${page}" data-print-page="${page}"><div class="print-frame"><header class="print-heading"><div class="print-kicker"><span>UNIFILARI / DISTRIBUZIONE ELETTRICA</span><span>VERSIONE ${esc(state.meta.revision || '1.0')}</span></div><h1>${title}</h1>${subtitle ? `<p>${esc(subtitle)}</p>` : ''}</header><div class="print-content">${content}</div>${note}${titleBlockMarkup(page, total)}</div></article>`;
+}
+function indexMarkup(entries, page, total, continued = false) {
+  const rows = entries.map((entry) => `<tr data-root="${esc(entry.rootKey)}"><td><a href="#print-page-${entry.printedPages[0]}">${esc(entry.node?.title || entry.title || 'Fornitura')}${entry.continued ? ' (segue)' : ''}</a></td><td>${printPageLinks(entry.printedPages)}</td></tr>`).join('');
+  const table = `<table class="print-table index-table"><thead><tr><th>Fornitura / quadro</th><th>Pagine del PDF</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return printSheetMarkup('index-sheet', `Indice degli schemi${continued ? ' (segue)' : ''}`, page, total, table, '<p class="print-note index-hint">Seleziona un nome o un numero di pagina per aprire lo schema. Gli intervalli comprendono tutte le pagine indicate.</p>');
+}
+const printKW = (watts) => `${(watts / 1000).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} kW`;
+const printAmps = (amps) => `${amps.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} A`;
+const printPercent = (value) => `${value.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+function phaseReportMarkup(entries, page, total, summary, continued = false) {
+  const names = ['R', 'S', 'T'], values = names.map((name) => summary.phases[name]);
+  const totalWatts = values.reduce((sum, phase) => sum + phase.watts, 0), averageWatts = totalWatts / 3;
+  const wattDifference = Math.max(...values.map((phase) => phase.watts)) - Math.min(...values.map((phase) => phase.watts));
   const ampDifference = Math.max(...values.map((phase) => phase.amps)) - Math.min(...values.map((phase) => phase.amps));
   const deviation = averageWatts > 0 ? Math.max(...values.map((phase) => Math.abs(phase.watts - averageWatts))) / averageWatts * 100 : 0;
-  const rows = names.map((name) => {
-    const phase = summary.phases[name], width = phase.watts > 0 ? Math.max(2, phase.watts / maximumWatts * 100) : 0;
-    return `<div class="phase-report-row phase-report-${name.toLowerCase()}"><span class="phase-report-badge">${name}</span><div class="phase-report-track"><span style="width:${width.toFixed(2)}%"></span></div><strong>${formatPhasePower(phase.watts)}</strong><strong>${phase.amps.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} A</strong></div>`;
+  const maximumAmps = Math.max(...values.map((phase) => phase.amps));
+  const mostLoaded = maximumAmps > 0 ? names.filter((name) => Math.abs(summary.phases[name].amps - maximumAmps) < 0.000001).join(', ') : '—';
+  const phaseRows = names.map((name) => {
+    const phase = summary.phases[name], share = totalWatts > 0 ? phase.watts / totalWatts * 100 : 0;
+    return `<tr class="phase-report-${name.toLowerCase()}"><th><span class="phase-report-badge">${name}</span></th><td><div class="phase-share"><div class="phase-report-track"><span style="width:${share.toFixed(4)}%"></span></div><strong>${printPercent(share)}</strong></div></td><td>${printKW(phase.watts)}</td><td>${printAmps(phase.amps)}</td></tr>`;
   }).join('');
-  return `<article class="phase-report-sheet" data-print-page="${page}"><div class="phase-report-heading">Bilancio carichi per fase</div><div class="phase-report-content"><section class="phase-report-total"><span>Potenza totale assegnata</span><strong>${formatPhasePower(totalWatts)}</strong></section><div class="phase-report-grid"><section><h2>Ripartizione sulle tre fasi</h2><div class="phase-report-columns" aria-hidden="true"><span>Fase</span><span>Carico relativo</span><span>Potenza</span><span>Corrente</span></div>${rows}</section><aside class="phase-report-details"><h2>Sbilanciamento</h2><div><span>Differenza massima</span><strong>${formatPhasePower(wattDifference)} - ${ampDifference.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} A</strong></div><div><span>Scostamento dal valore medio</span><strong>${deviation.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</strong></div><div><span>Media per fase</span><strong>${formatPhasePower(averageWatts)}</strong></div></aside></div></div><p class="phase-report-note">Calcolo indicativo: 230 V monofase, 400 V trifase, cos φ = 1. I carichi trifase sono ripartiti in parti uguali su R, S e T.</p>${titleBlockMarkup(page, total)}</article>`;
+  const overview = `<section class="phase-report-total"><div><span>Potenza totale assegnata</span><p>Somma dei carichi collegati con fase identificata</p></div><strong>${printKW(totalWatts)}</strong></section><div class="phase-report-grid"><section><h2>Ripartizione sulle tre fasi</h2><table class="phase-table"><thead><tr><th>Fase</th><th>Quota della potenza assegnata</th><th>Potenza</th><th>Corrente stimata</th></tr></thead><tbody>${phaseRows}</tbody></table><p class="phase-scale">Barre su scala 0-100% del totale assegnato. Percentuali arrotondate.</p></section><aside class="phase-report-details"><h2>Sbilanciamento</h2><div><span>Fase più caricata${mostLoaded.includes(',') ? ' (a pari carico)' : ''}</span><strong>${mostLoaded}${maximumAmps > 0 ? ` · ${printAmps(maximumAmps)}` : ''}</strong></div><div><span>Differenza tra fase più e meno caricata</span><strong>${printAmps(ampDifference)}</strong><small>corrispondenti a ${printKW(wattDifference)}</small></div><div><span>Scostamento massimo dalla media</span><strong>${printPercent(deviation)}</strong><small>Media per fase: ${printKW(averageWatts)}</small></div></aside></div>`;
+  const rows = entries.map((entry) => {
+    const phases = entry.summary.phases, watts = names.reduce((sum, name) => sum + phases[name].watts, 0);
+    return `<tr data-root="${esc(entry.rootKey)}"><th scope="row">${esc(entry.node.title || 'Fornitura')}${entry.continued ? ' (segue)' : ''}</th><td>${entry.continued ? '' : printKW(watts)}</td>${names.map((name) => `<td>${entry.continued ? '' : phases[name].amps.toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}</td>`).join('')}<td>${printPageLinks(entry.printedPages)}</td></tr>`;
+  }).join('');
+  const table = `<section class="supply-report"><h2>Dettaglio per fornitura / quadro</h2><table class="print-table supply-table"><thead><tr><th>Fornitura / quadro</th><th>Potenza</th><th>R (A)</th><th>S (A)</th><th>T (A)</th><th>Tavole PDF</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+  const note = '<div class="print-note phase-report-note"><strong>Criteri di calcolo</strong><p>Stima: 230/400 V, cos φ = 1. Carichi trifase ripartiti in parti uguali su R, S e T.<br>Scostamento: massimo scarto assoluto dalla media, diviso per la media.</p></div>';
+  return printSheetMarkup('phase-report-sheet', `Riepilogo carichi e distribuzione fasi${continued ? ' (segue)' : ''}`, page, total, (continued ? '' : overview) + (entries.length ? table : ''), note);
 }
-function splitIntoPages(items, size) { return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size)); }
-function topologyNodeKey(node) {
-  if (node?.type === 'supply') return `supply:${supplyKey(node)}`;
-  if (node?.type === 'panel') return `panel:${panelKey(node)}`;
-  return '';
-}
-function indexTopology(diagramPages) {
-  const canonical = new Map([...uniqueSupplies(), ...uniquePanels()].map((node) => [topologyNodeKey(node), node])), physicalLinks = state.links.filter((link) => !isReferenceLink(link)).map((link) => ({ from: nodeById(link.from), to: nodeById(link.to) })).filter(({ from, to }) => ['supply', 'panel'].includes(from?.type) && to?.type === 'panel'), parentByKey = new Map(), childKeys = new Set(), physicalIds = new Set();
-  physicalLinks.forEach(({ from, to }) => { const fromKey = topologyNodeKey(from), toKey = topologyNodeKey(to); canonical.set(fromKey, from); canonical.set(toKey, to); parentByKey.set(toKey, fromKey); childKeys.add(fromKey); physicalIds.add(from.id); physicalIds.add(to.id); });
-  const pathFor = (key) => {
-    const path = [], visited = new Set(); let current = key;
-    while (current && !visited.has(current)) { visited.add(current); path.unshift(current); current = parentByKey.get(current); }
-    return path;
+function paginatePrintRows(entries, firstMarkup, nextMarkup = firstMarkup, allowEmptyFirst = false) {
+  if (!entries.length) return [[]];
+  const measure = (markup) => {
+    $('#print-pages').insertAdjacentHTML('beforeend', markup);
+    const sheet = $('#print-pages').lastElementChild;
+    try {
+      const rows = [...sheet.querySelectorAll('.print-table tbody tr')];
+      return { capacity: sheet.querySelector('.print-content').getBoundingClientRect().bottom - rows[0].getBoundingClientRect().top - 2, heights: rows.map((row) => row.getBoundingClientRect().height) };
+    } finally { sheet.remove(); }
   };
-  let entries = [];
-  uniquePanels().forEach((panel) => {
-    const key = topologyNodeKey(panel), instances = panelGroup(panel).sort((first, second) => first.page - second.page), physical = instances.find((node) => physicalIds.has(node.id)) || instances[0], referencePages = [...new Set(instances.filter((node) => node.id !== physical.id).map((node) => node.page))], isMainDistributionPanel = canonical.get(parentByKey.get(key))?.type === 'supply' && childKeys.has(key), destinationPages = isMainDistributionPanel ? [] : referencePages.length ? referencePages : [physical.page];
-    destinationPages.filter((page) => diagramPages.includes(page)).forEach((page) => entries.push({ panelKey: key, page, path: pathFor(key) }));
+  const first = measure(firstMarkup()), next = measure(nextMarkup()), groups = [];
+  let group = [], height = 0, capacity = first.capacity;
+  entries.forEach((entry, index) => {
+    const rowHeight = first.heights[index];
+    if (height + rowHeight > capacity) {
+      if (group.length || (allowEmptyFirst && !groups.length)) groups.push(group);
+      group = []; height = 0; capacity = next.capacity;
+    }
+    if (rowHeight > capacity) throw new Error('Il testo di una riga è troppo lungo per la pagina. Riduci il nome della fornitura o i dati del cartiglio.');
+    group.push(entry); height += rowHeight;
   });
-  if (!entries.length) {
-    diagramPages.forEach((page) => {
-      const pagePanels = state.nodes.filter((node) => node.page === page && node.type === 'panel'), leaves = pagePanels.filter((node) => !childKeys.has(topologyNodeKey(node))), candidates = leaves.length ? leaves : pagePanels.slice(-1);
-      candidates.forEach((panel) => { const key = topologyNodeKey(panel); entries.push({ panelKey: key, page, path: pathFor(key) }); });
-    });
-  }
-  entries = entries.filter((entry, index, list) => entry.path.length && list.findIndex((item) => item.panelKey === entry.panelKey && item.page === entry.page) === index).sort((first, second) => first.page - second.page || (canonical.get(first.panelKey)?.title || '').localeCompare(canonical.get(second.panelKey)?.title || '', 'it', { numeric: true }));
-  return { canonical, entries };
-}
-function indexSupplyEntries(diagramPages, topology) {
-  const pagesBySupply = new Map();
-  const addPage = (rootKey, page) => {
-    if (topology.canonical.get(rootKey)?.type !== 'supply' || !diagramPages.includes(page)) return;
-    if (!pagesBySupply.has(rootKey)) pagesBySupply.set(rootKey, new Set());
-    pagesBySupply.get(rootKey).add(page);
-  };
-  topology.entries.forEach((entry) => addPage(entry.path[0], entry.page));
-  state.nodes.filter((node) => node.type === 'supply').forEach((node) => addPage(topologyNodeKey(node), node.page));
-  return [...pagesBySupply.entries()].map(([rootKey, pages]) => ({
-    rootKey,
-    supply: topology.canonical.get(rootKey),
-    pages: [...pages].sort((first, second) => first - second),
-  })).sort((first, second) => first.pages[0] - second.pages[0] || (first.supply?.title || '').localeCompare(second.supply?.title || '', 'it', { numeric: true }));
-}
-function indexMarkup(entries, indexPage, total, diagramOffset, diagramPages) {
-  const count = entries.length, startY = count === 1 ? 365 : 120, step = count === 1 ? 0 : Math.min(90, 540 / (count - 1)), supplyX = 260, supplyWidth = 260, pageX = 940, pageWidth = 230;
-  const rows = entries.map((entry, index) => {
-    const y = startY + index * step, supplyLines = wrapText(entry.supply?.title || 'Fornitura', 28), supplyHeight = Math.max(58, supplyLines.length * 18 + 22), printedPages = entry.pages.map((page) => diagramOffset + diagramPages.indexOf(page) + 1), pageLabel = `${printedPages.length === 1 ? 'Pagina' : 'Pagine'} ${printedPages.join(', ')}`, pageLines = wrapText(pageLabel, 24), pageHeight = Math.max(58, pageLines.length * 18 + 22), supplyTextY = y - ((supplyLines.length - 1) * 18) / 2 + 5, pageTextY = y - ((pageLines.length - 1) * 18) / 2 + 5;
-    return `<rect class="index-node" x="${supplyX - supplyWidth / 2}" y="${y - supplyHeight / 2}" width="${supplyWidth}" height="${supplyHeight}"/>${supplyLines.map((line, lineIndex) => `<text class="index-node-text index-node-title" x="${supplyX}" y="${supplyTextY + lineIndex * 18}">${esc(line)}</text>`).join('')}<path class="index-connector" marker-end="url(#index-arrow-${indexPage})" d="M${supplyX + supplyWidth / 2},${y} H${pageX - pageWidth / 2}"/><rect class="index-page-box" x="${pageX - pageWidth / 2}" y="${y - pageHeight / 2}" width="${pageWidth}" height="${pageHeight}"/>${pageLines.map((line, lineIndex) => `<text class="index-page-text" x="${pageX}" y="${pageTextY + lineIndex * 18}">${esc(line)}</text>`).join('')}`;
-  }).join('');
-  return `<article class="drawing-sheet index-sheet" data-print-page="${indexPage}"><div class="drawing-title">Schema unifilare di distribuzione elettrica</div><svg class="index-diagram" viewBox="0 0 1200 780" aria-label="Indice schemi per fornitura"><defs><marker id="index-arrow-${indexPage}" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#1c1c1c"/></marker></defs>${rows}</svg>${titleBlockMarkup(indexPage, total)}</article>`;
+  if (group.length) groups.push(group);
+  return groups;
 }
 let printSession = null;
 function buildPrintPages() {
@@ -1369,14 +1389,30 @@ function buildPrintPages() {
   const currentPage = state.currentPage, printPages = $('#print-pages');
   const diagramPages = sortedPages().filter((page) => state.nodes.some((node) => node.page === page));
   const exportedPages = diagramPages.length ? diagramPages : [1];
-  const indexEntries = exportedPages.length > 1 ? indexSupplyEntries(exportedPages, indexTopology(exportedPages)) : [];
-  const indexGroups = splitIntoPages(indexEntries, 8), pageOffset = 1 + indexGroups.length;
-  const totalPages = exportedPages.length + pageOffset + 1;
-  printSession = { previousTitle: document.title, totalPages, diagrams: exportedPages.length };
+  const entries = Core.distributionEntries(state);
+  const coveredPages = new Set(entries.flatMap((entry) => entry.pages));
+  const indexEntries = [...entries, ...exportedPages.filter((page) => !coveredPages.has(page)).map((page) => ({ rootKey: `page:${page}`, title: state.pageNames?.[page] || `Schema ${page}`, pages: [page] }))]
+    .sort((a, b) => a.pages[0] - b.pages[0]);
+  const summary = Core.calculatePhaseLoads(state);
+  const reportEntries = entries.map((entry) => ({ ...entry, summary: Core.calculatePhaseLoads(state, { loadIds: entry.loadIds }) }));
+  printSession = { previousTitle: document.title, totalPages: 0, diagrams: exportedPages.length, reports: 0 };
   $('#print-project').disabled = true;
   try {
-    printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, index + 2, totalPages, pageOffset, exportedPages)).join('');
-    printPageNumbers = new Map(exportedPages.map((page, index) => [page, index + pageOffset + 1]));
+    document.body.classList.add('preparing-print');
+    let indexGroups = [], expectedIndexes = exportedPages.length > 1 ? 1 : 0;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      printPageNumbers = new Map(exportedPages.map((page, index) => [page, index + expectedIndexes + 2]));
+      const rows = printedEntryRows(indexEntries, printPageNumbers);
+      indexGroups = exportedPages.length > 1 ? paginatePrintRows(rows, () => indexMarkup(rows, 0, 99999)) : [];
+      if (indexGroups.length === expectedIndexes) break;
+      expectedIndexes = indexGroups.length;
+      if (attempt === 7) throw new Error('Non è stato possibile impaginare l’indice.');
+    }
+    const reportRows = printedEntryRows(reportEntries, printPageNumbers);
+    const reportGroups = paginatePrintRows(reportRows, () => phaseReportMarkup(reportRows, 0, 99999, summary), () => phaseReportMarkup(reportRows, 0, 99999, summary, true), true);
+    const pageOffset = 1 + indexGroups.length, totalPages = exportedPages.length + pageOffset + reportGroups.length;
+    Object.assign(printSession, { totalPages, reports: reportGroups.length });
+    printPages.innerHTML = coverMarkup() + indexGroups.map((group, index) => indexMarkup(group, index + 2, totalPages, index > 0)).join('');
     exportedPages.forEach((page, index) => {
       const printPage = index + pageOffset + 1;
       state.currentPage = page;
@@ -1393,15 +1429,21 @@ function buildPrintPages() {
       sheet.querySelectorAll('[tabindex]').forEach((element) => { element.removeAttribute('tabindex'); element.removeAttribute('role'); });
       sheet.removeAttribute('id');
       sheet.querySelectorAll('[id]:not(marker)').forEach((element) => element.removeAttribute('id'));
+      sheet.id = `print-page-${printPage}`;
       printPages.append(sheet);
     });
-    printPages.insertAdjacentHTML('beforeend', phaseReportMarkup(totalPages, totalPages));
+    printPages.insertAdjacentHTML('beforeend', reportGroups.map((group, index) => phaseReportMarkup(group, exportedPages.length + pageOffset + index + 1, totalPages, summary, index > 0)).join(''));
     const renderedPages = [...printPages.children];
     if (renderedPages.length !== totalPages || renderedPages.some((sheet, index) => Number(sheet.dataset.printPage) !== index + 1)) {
       throw new Error('La numerazione delle pagine non è completa.');
     }
+    renderedPages.filter((sheet) => sheet.classList.contains('print-sheet')).forEach((sheet) => {
+      const content = sheet.querySelector('.print-content'), bottom = content.getBoundingClientRect().bottom;
+      if ([...content.children].some((child) => child.getBoundingClientRect().bottom > bottom + 1)) {
+        throw new Error('I dati del cartiglio occupano troppo spazio. Riduci i testi nelle proprietà del progetto.');
+      }
+    });
     document.title = `Unifilare ${state.meta.name || 'Progetto'} ${state.meta.revision || ''}`.trim();
-    document.body.classList.add('preparing-print');
     return true;
   } catch (error) {
     finishPrint(false);
@@ -1415,13 +1457,13 @@ function buildPrintPages() {
 }
 function finishPrint(notify = true) {
   if (!printSession) return;
-  const { previousTitle, totalPages, diagrams } = printSession;
+  const { previousTitle, totalPages, diagrams, reports } = printSession;
   printSession = null;
   document.title = previousTitle;
   document.body.classList.remove('preparing-print');
   $('#print-pages').replaceChildren();
   $('#print-project').disabled = false;
-  if (notify) showStatus(`Documento preparato: ${totalPages} pagine totali, di cui ${diagrams} schemi e 1 riepilogo carichi.`, 'success');
+  if (notify) showStatus(`Documento preparato: ${totalPages} pagine totali, di cui ${diagrams} schemi e ${reports} ${reports === 1 ? 'pagina di riepilogo carichi' : 'pagine di riepilogo carichi'}.`, 'success');
 }
 function preparePrint() {
   if (printSession || !buildPrintPages()) return;

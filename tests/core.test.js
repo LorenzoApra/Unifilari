@@ -293,6 +293,28 @@ assert.equal(Core.compatibleConnector('powerlock400', 'powerlock250'), true);
   assert.equal(onlyA.phases.S.watts, 1150);
   assert.equal(onlyB.phases.R.watts, 4600);
   assert.equal(onlyB.phases.S.watts, 0);
+  const snapshot = JSON.stringify(current);
+  const groups = Core.distributionEntries(current);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups[0].pages, [1, 2]);
+  assert.deepEqual(groups[0].loadIds, [loadA1.id, loadA2.id]);
+  assert.equal(Core.calculatePhaseLoads(current, { loadIds: groups[0].loadIds }).phases.S.watts, 1150);
+  assert.deepEqual(Core.calculatePhaseLoads(current, { loadIds: [] }).phases.R, { watts: 0, amps: 0 });
+  assert.equal(JSON.stringify(current), snapshot);
+}
+
+{
+  const resident = node({ ...mainPanel, id: 'resident', panelKey: 'kitchen', title: 'Quadro residente cucina' });
+  const reference = node({ ...resident, id: 'kitchen-reference', page: 3 });
+  const connected = node({ ...load, id: 'kitchen-load', socket: 'P1', watts: 230, page: 3 });
+  const free = node({ ...load, id: 'free-load', socket: '', watts: 10000, page: 2 });
+  const current = project([resident, reference, connected, free], [{ id: 'kitchen-link', from: reference.id, to: connected.id, cable: 'cee16mono', length: 20 }]);
+  const groups = Core.distributionEntries(current);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].node.title, resident.title);
+  assert.deepEqual(groups[0].pages, [1, 3]);
+  assert.deepEqual(groups[0].loadIds, [connected.id]);
+  assert.equal(Core.calculatePhaseLoads(current, { loadIds: groups[0].loadIds }).phases.R.watts, 230);
 }
 
 {

@@ -106,6 +106,16 @@ Ogni nuovo progetto parte con i dati della ditta vuoti, anche se il progetto pre
 
 La ricerca del luogo usa il campo **Cerca indirizzo** oppure, se vuoto, l’indirizzo già compilato nei campi Via, CAP, Comune e Provincia.
 
+## Esportazione PDF
+
+Il documento contiene la copertina, l’indice quando sono presenti più schemi, le tavole e il riepilogo finale, in A4 orizzontale.
+
+- **Indice compatto**: tabella con righe alternate, forniture e quadri residenti, intervalli di pagine consecutivi e collegamenti interni agli schemi. I richiami dello stesso elemento fisico confluiscono nella stessa voce. Le pagine prive di una fornitura o di un quadro hanno comunque un riferimento nell’indice.
+- **Riepilogo carichi**: potenza assegnata, potenza e corrente stimata per fase, percentuali sul totale, sbilanciamento e dettaglio per fornitura o quadro con i riferimenti alle tavole. Le utenze non collegate non contribuiscono ai valori; conteggi, elenchi di utenze escluse e note di progetto non sono stampati nel riepilogo.
+- **Impaginazione automatica**: indice e dettaglio carichi proseguono su altre pagine quando necessario, senza ridurre il carattere. Nomi lunghi e cartigli vengono misurati prima della stampa; la numerazione tiene conto di tutte le pagine aggiunte e degli schemi effettivamente esportati.
+
+Le barre delle fasi hanno scala 0-100% della potenza assegnata. Lo scostamento indica il massimo scarto assoluto dalla potenza media per fase, diviso per la media; a carico nullo vale zero. I criteri di calcolo sono riportati in fondo al riepilogo.
+
 ## Progetti precedenti
 
 I progetti con schema precedente alla versione 6 vengono migrati automaticamente:

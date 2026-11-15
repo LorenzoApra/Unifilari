@@ -615,159 +615,256 @@ label input, label select {
   }
 }
 
-.index-sheet {
-  color: #111;
-}
-
-.index-sheet .drawing-title {
-  font-family: Georgia, serif;
-}
-
-.index-diagram .index-connector {
-  fill: none;
-  stroke: #1c1c1c;
-  stroke-width: 1.45;
-}
-
-.index-diagram .index-node, .index-diagram .index-page-box {
-  fill: #b8b5b5;
-}
-
-.index-diagram .index-node-text, .index-diagram .index-page-text {
-  fill: #111;
-  text-anchor: middle;
-  font: 14px Georgia, serif;
-}
-
-.index-diagram .index-node-title {
-  font-weight: bold;
-}
-
-.index-diagram .index-page-text {
-  font-size: 15px;
-  font-weight: bold;
-}
-
-.phase-report-sheet {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 297 / 210;
-  overflow: hidden;
-  border: 2px solid var(--ink);
-  color: #151515;
+/* Pagine editoriali del PDF: indice e riepilogo, sempre in A4 orizzontale. */
+.print-sheet {
+  box-sizing: border-box;
+  width: 297mm;
+  height: 210mm;
+  padding: 8mm;
+  color: #24364b;
   background: #fff;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font: 10pt/1.25 Arial, sans-serif;
 }
 
-.phase-report-heading {
-  height: 7.2%;
-  display: grid;
-  place-items: center;
-  border-bottom: 2px solid var(--ink);
-  font: 26px/1.1 Georgia, serif;
+.print-frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  border: .25mm solid #152f51;
+  border-top-width: 1mm;
 }
 
-.phase-report-content {
-  position: absolute;
-  top: 7.2%;
-  right: 0;
-  bottom: 11.8%;
-  left: 0;
-  padding: 27px 47px 20px;
+.print-heading {
+  flex: 0 0 auto;
+  padding: 4mm 4mm 0;
+}
+
+.print-kicker {
+  display: flex;
+  justify-content: space-between;
+  gap: 4mm;
+  color: #617086;
+  font-size: 7.4pt;
+  font-weight: bold;
+}
+
+.print-kicker > span:last-child {
+  flex-shrink: 0;
+}
+
+.print-heading h1 {
+  margin: 3mm 0 1.5mm;
+  color: #152f51;
+  font-size: 20pt;
+  line-height: 1.12;
+}
+
+.print-heading p {
+  margin: 0;
+  font-size: 9pt;
+  color: #617086;
+  overflow-wrap: anywhere;
+}
+
+.print-content {
+  flex: 1;
+  min-height: 0;
+  padding: 6mm 4mm 2mm;
+}
+
+.print-sheet h2 {
+  margin: 0 0 2mm;
+  color: #152f51;
+  font-size: 11pt;
+  line-height: 1.2;
+}
+
+.print-sheet a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.print-table, .phase-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-variant-numeric: tabular-nums;
+}
+
+.print-table th, .print-table td {
+  height: 8mm;
+  padding: 1.5mm 2.5mm;
+  border-bottom: .2mm solid #d5dee8;
+  overflow-wrap: anywhere;
+  text-align: right;
+  vertical-align: middle;
+  font-size: 10.5pt;
+  font-weight: normal;
+}
+
+.print-table th:first-child, .print-table td:first-child {
+  text-align: left;
+}
+
+.print-table thead th {
+  background: #f3f6fa;
+  color: #617086;
+  font-size: 8.5pt;
+  font-weight: bold;
+}
+
+.print-table tbody tr:nth-child(odd) {
+  background: #f3f6fa;
+}
+
+.index-table th:first-child {
+  width: 72%;
+}
+
+.index-table thead th {
+  background: #152f51;
+  color: #fff;
+}
+
+.index-table td:last-child {
+  color: #152f51;
+  font-weight: bold;
+}
+
+.print-note {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 2mm 4mm 3mm;
+  color: #617086;
+  font-size: 8pt;
+}
+
+.print-sheet .title-block {
+  position: static;
+  flex: 0 0 auto;
+  min-height: 17mm;
+  font: 7.3pt/1.15 Arial, sans-serif;
+  color: #24364b;
+  border-color: #152f51;
+}
+
+.print-sheet .title-block div {
+  padding: 1.5mm 2.5mm;
+  gap: .3mm;
+  border-color: #152f51;
+}
+
+.print-sheet .title-block small {
+  font-size: 6.4pt;
+  color: #617086;
+}
+
+.print-sheet .title-block strong {
+  font: bold 8.2pt/1.15 Arial, sans-serif;
 }
 
 .phase-report-total {
-  padding: 12px 18px;
-  border-top: 1px solid #b8c0cc;
-  border-bottom: 1px solid #b8c0cc;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5mm;
+  min-height: 22mm;
+  padding: 3mm 4mm;
+  background: #f3f6fa;
+  border-radius: 1.5mm;
 }
 
 .phase-report-total span {
-  display: block;
-  margin-bottom: 2px;
-  color: #667085;
-  font-size: 13px;
+  color: #617086;
+  font-size: 8.4pt;
+  font-weight: bold;
+  text-transform: uppercase;
 }
 
-.phase-report-total strong {
-  color: var(--ink);
-  font-size: 27px;
-  font-weight: 650;
+.phase-report-total p {
+  margin: 3mm 0 0;
+  color: #617086;
+  font-size: 9pt;
+}
+
+.phase-report-total > strong {
+  flex-shrink: 0;
+  color: #152f51;
+  font-size: 27pt;
 }
 
 .phase-report-grid {
   display: grid;
-  grid-template-columns: minmax(0, 2.25fr) minmax(235px, .85fr);
-  gap: 45px;
-  margin-top: 28px;
+  grid-template-columns: minmax(0, 1.84fr) minmax(0, 1fr);
+  gap: 6mm;
+  margin-top: 6mm;
 }
 
-.phase-report-grid h2 {
-  margin: 0 0 10px;
-  color: var(--ink);
-  font-size: 16px;
+.phase-table {
+  font-size: 10pt;
 }
 
-.phase-report-columns, .phase-report-row {
-  display: grid;
-  grid-template-columns: 50px minmax(160px, 1fr) 110px 90px;
-  align-items: center;
-  gap: 16px;
+.phase-table thead th {
+  padding: 2mm 0;
+  text-align: left;
+  color: #617086;
+  font-size: 8pt;
+  font-weight: normal;
+  border-bottom: .2mm solid #d5dee8;
 }
 
-.phase-report-columns {
-  padding-bottom: 7px;
-  border-bottom: 1px solid #b8c0cc;
-  color: #667085;
-  font-size: 11px;
+.phase-table thead th:first-child {
+  width: 10%;
 }
 
-.phase-report-columns span:nth-child(n+3) {
+.phase-table thead th:nth-child(2) {
+  width: 46%;
+}
+
+.phase-table thead th:nth-child(3) {
+  width: 22%;
+}
+
+.phase-table th:nth-child(n+3), .phase-table td:nth-child(n+3) {
   text-align: right;
 }
 
-.phase-report-row {
-  min-height: 72px;
-  border-bottom: 1px solid #e2e6eb;
-}
-
-.phase-report-row > strong {
-  text-align: right;
-  font-size: 15px;
-  font-variant-numeric: tabular-nums;
+.phase-table tbody th, .phase-table tbody td {
+  height: 13mm;
+  padding: 1mm;
+  border-bottom: .2mm solid #d5dee8;
+  font-weight: bold;
+  white-space: nowrap;
 }
 
 .phase-report-badge {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 7mm;
+  height: 7mm;
   border-radius: 50%;
   color: #fff;
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 10pt;
 }
 
-.phase-report-s .phase-report-badge {
-  color: #4d3900;
+.phase-share {
+  display: flex;
+  align-items: center;
+  gap: 3mm;
 }
 
-.phase-report-r .phase-report-badge, .phase-report-r .phase-report-track span {
-  background: #b94343;
-}
-
-.phase-report-s .phase-report-badge, .phase-report-s .phase-report-track span {
-  background: #d1a52e;
-}
-
-.phase-report-t .phase-report-badge, .phase-report-t .phase-report-track span {
-  background: #3478b9;
+.phase-share > strong {
+  min-width: 12mm;
+  text-align: right;
+  font-size: 9pt;
 }
 
 .phase-report-track {
-  height: 13px;
+  flex: 1;
+  height: 2.6mm;
   overflow: hidden;
-  background: #e9edf2;
+  background: #e9eef3;
+  border-radius: .65mm;
 }
 
 .phase-report-track span {
@@ -775,39 +872,102 @@ label input, label select {
   height: 100%;
 }
 
+.phase-report-r .phase-report-badge, .phase-report-r .phase-report-track span {
+  background: #b64747;
+}
+
+.phase-report-s .phase-report-badge, .phase-report-s .phase-report-track span {
+  background: #c49a2e;
+}
+
+.phase-report-s .phase-report-badge {
+  color: #493600;
+}
+
+.phase-report-t .phase-report-badge, .phase-report-t .phase-report-track span {
+  background: #3478ad;
+}
+
+.phase-scale {
+  margin: 1.5mm 0 0;
+  color: #617086;
+  font-size: 7.2pt;
+}
+
 .phase-report-details {
-  padding-left: 30px;
-  border-left: 1px solid #b8c0cc;
+  padding: 4mm;
+  background: #f3f6fa;
+  border-radius: 1.5mm;
 }
 
 .phase-report-details > div {
-  padding: 13px 0;
-  border-bottom: 1px solid #e2e6eb;
+  padding: 2mm 0;
+  border-bottom: .2mm solid #d5dee8;
 }
 
-.phase-report-details span, .phase-report-details strong {
+.phase-report-details > div:last-child {
+  border: 0;
+  padding-bottom: 0;
+}
+
+.phase-report-details span, .phase-report-details strong, .phase-report-details small {
   display: block;
 }
 
-.phase-report-details span {
-  margin-bottom: 3px;
-  color: #667085;
-  font-size: 12px;
+.phase-report-details span, .phase-report-details small {
+  color: #617086;
+  font-size: 8pt;
 }
 
 .phase-report-details strong {
-  font-size: 17px;
+  margin: 1mm 0;
+  color: #152f51;
+  font-size: 13pt;
+}
+
+.supply-report {
+  margin-top: 5mm;
+}
+
+.supply-table th:first-child {
+  width: 34%;
+}
+
+.supply-table th:nth-child(2) {
+  width: 19%;
+}
+
+.supply-table th:last-child {
+  width: 17%;
+}
+
+.supply-table th, .supply-table td {
+  font-size: 9pt;
+}
+
+.supply-table tbody th {
+  font-weight: bold;
 }
 
 .phase-report-note {
-  position: absolute;
-  right: 47px;
-  bottom: 82px;
-  left: 47px;
-  margin: 0;
-  color: #667085;
-  font-size: 10px;
+  display: grid;
+  grid-template-columns: 45mm 1fr;
+  align-items: center;
+  gap: 7mm;
+  font-size: 8pt;
 }
+
+.phase-report-note > strong {
+  color: #152f51;
+  font-size: 9.5pt;
+}
+
+.phase-report-note p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+
 
 .app-shell.has-inspector {
   grid-template-columns: 210px minmax(0, 1fr) 280px;
