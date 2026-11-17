@@ -61,9 +61,16 @@ La vista è gestita da `viewport.js`, senza introdurre un framework o dipendenze
 - Impaginazione misurata sulle righe effettive e sul cartiglio, con pagine di seguito per elenchi lunghi. Riferimenti e numerazione vengono determinati prima di generare gli schemi.
 - Verificati indice a una pagina con 15 alimentazioni, 35 nomi lunghi con indirizzo esteso, carico nullo, richiami tra pagine e ripristino della numerazione dell'editor dopo la stampa. Controllo visivo delle pagine in WebKit.
 
+## Riordino delle pagine - 17 novembre 2026
+
+- Nella panoramica Pagine: maniglia di trascinamento, comandi Prima / Dopo e scelta diretta della posizione. Indicatore di inserimento e scorrimento automatico vicino ai bordi; Escape interrompe il gesto.
+- Nomi, contenuti e pagina aperta seguono la nuova numerazione. Identificativi, collegamenti, prese e coordinate rimangono associati agli elementi originali. L'ordine è salvato usando lo schema JSON 6 già esistente.
+- Ogni spostamento è annullabile separatamente. Annulla e Ripristina sono disponibili nel dialogo, anche da tastiera fuori dai campi di testo. La modifica di un nome prima di uno spostamento viene conservata.
+- Verificati trascinamento nella griglia, scorrimento su finestra da 390 px, annullamento, spostamento 8 a 3, salvataggio, recupero e riferimenti rinumerati nell'indice e nel riepilogo PDF. Controllo visivo di desktop, trascinamento e dialogo della posizione in WebKit.
+
 ## Verifiche
 
-- Verifica del 15 novembre 2026: controlli di sintassi e dominio superati; **62 test dell’interfaccia superati** su Firefox e WebKit, comprese le nuove pagine di stampa.
+- Verifica del 17 novembre 2026: controlli di sintassi e dominio superati; **70 test dell’interfaccia superati** su Firefox e WebKit, compresi riordino e pagine di stampa.
 - Test del dominio e delle migrazioni: `npm run check`.
 - Suite dell’interfaccia: `npm run test:browser`, con gli stessi scenari in Firefox e WebKit.
 - Le prove di stampa automatizzate controllano preparazione, dimensioni, numerazione, marker e pulizia delle pagine. Il PDF prodotto dalla finestra nativa e il comportamento su dispositivi Safari/iOS reali richiedono una verifica manuale.

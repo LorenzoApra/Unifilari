@@ -436,4 +436,41 @@ assert.equal(Core.compatibleConnector('powerlock400', 'powerlock250'), true);
   assert.equal(Core.serializeProject(project([])).pageNames, undefined);
 }
 
+
+{
+  const current = {
+    ...project([node({ ...mainPanel, page: 1 }), node({ ...load, page: 3, socket: 'P1' })], [{ id: 'page-test-link', from: mainPanel.id, to: load.id, cable: 'cee16mono', length: 20 }]),
+    pages: [1, 2, 3, 4], pageNames: { 1: 'Palco', 2: 'Vuota', 3: 'Regia' }, currentPage: 1,
+  };
+  const original = JSON.stringify(current);
+  const result = Core.reorderPages(current, 3, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.changed, true);
+  assert.deepEqual(result.project.pages, [1, 2, 3, 4]);
+  assert.equal(result.project.currentPage, 2);
+  assert.deepEqual(result.project.pageNames, { 1: 'Regia', 2: 'Palco', 3: 'Vuota' });
+  assert.deepEqual(result.project.nodes.map((item) => item.page), [2, 1]);
+  assert.equal(result.project.links, current.links);
+  assert.deepEqual(result.project.nodes.map(({ page, ...item }) => item), current.nodes.map(({ page, ...item }) => item));
+  assert.equal(JSON.stringify(current), original);
+  const restored = Core.reorderPages(result.project, 1, 3);
+  assert.deepEqual(restored.project, current);
+  const reopened = Core.normalizeProject(Core.serializeProject(result.project));
+  assert.deepEqual(reopened.pageNames, result.project.pageNames);
+  assert.deepEqual(reopened.nodes.map((item) => item.page), [2, 1]);
+  assert.equal(Core.reorderPages(current, 1, 1).project, current);
+  for (const target of [0, -1, 5, 1.5, NaN, '2']) assert.equal(Core.reorderPages(current, 1, target).ok, false);
+  assert.equal(Core.reorderPages(current, 99, 2).ok, false);
+  assert.equal(Core.reorderPages(current, '1', 2).ok, false);
+}
+
+{
+  const sparse = { ...project([node({ ...load, page: 8 })]), pages: [2, 4, 8], currentPage: 8, pageNames: { 2: 'Vuota', 8: 'Utenze' } };
+  const result = Core.reorderPages(sparse, 8, 1).project;
+  assert.deepEqual(result.pages, [1, 2, 3]);
+  assert.equal(result.currentPage, 1);
+  assert.equal(result.nodes[0].page, 1);
+  assert.deepEqual(result.pageNames, { 1: 'Utenze', 2: 'Vuota' });
+}
+
 console.log('Core domain tests: OK');

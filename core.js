@@ -599,6 +599,30 @@
     };
   }
 
+  function reorderPages(project, sourcePage, targetPosition) {
+    const pages = [...new Set([...(project.pages || []), ...(project.nodes || []).map((node) => node.page)])].sort((a, b) => a - b);
+    const from = pages.indexOf(sourcePage);
+    if (from < 0 || !Number.isInteger(targetPosition) || targetPosition < 1 || targetPosition > pages.length) {
+      return { ok: false, changed: false };
+    }
+    if (from === targetPosition - 1) return { ok: true, changed: false, project };
+    const order = [...pages];
+    order.splice(from, 1);
+    order.splice(targetPosition - 1, 0, sourcePage);
+    const pageMap = new Map(order.map((page, index) => [page, index + 1]));
+    return {
+      ok: true,
+      changed: true,
+      project: {
+        ...project,
+        pages: order.map((_, index) => index + 1),
+        currentPage: pageMap.get(project.currentPage) || 1,
+        pageNames: Object.fromEntries(Object.entries(project.pageNames || {}).filter(([page]) => pageMap.has(Number(page))).map(([page, name]) => [pageMap.get(Number(page)), name])),
+        nodes: (project.nodes || []).map((node) => ({ ...node, page: pageMap.get(node.page) })),
+      },
+    };
+  }
+
   function serializeProject(state) {
     return {
       version: SCHEMA_VERSION,
@@ -739,6 +763,7 @@
     panelKey,
     panelSockets,
     requiredPlug,
+    reorderPages,
     samePhysicalNode,
     serializeProject,
     socketWarning,

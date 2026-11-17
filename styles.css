@@ -1911,6 +1911,106 @@ dialog .help { font-size: 13px; margin-bottom: 14px; }
 .page-thumbnail .thumbnail-load { fill: #dae8dc; stroke: #62826a; }
 .page-thumbnail .thumbnail-supply { fill: #c1d6f2; stroke: #376ba7; }
 .page-card label { margin: 14px 0 0; }
+.page-order-controls {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+.page-order-controls button {
+  min-height: 44px;
+  padding: 6px;
+  font-size: 14px;
+}
+.page-order-controls [data-page-step] {
+  flex: 1;
+}
+.page-order-controls .page-drag-handle {
+  flex: 0 0 44px;
+  touch-action: none;
+  cursor: grab;
+  font-size: 24px;
+  line-height: 1;
+}
+.page-drag-handle:disabled {
+  cursor: default;
+}
+.page-position-button {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+}
+.page-order-message {
+  min-height: 1.35em;
+  margin: 0 0 14px;
+  color: #235d91;
+  font-size: 13px;
+}
+.page-card {
+  position: relative;
+}
+.page-card.is-dragging {
+  opacity: .45;
+}
+.page-cards.is-reordering {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.page-card.drop-before::before, .page-card.drop-after::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 2px;
+  background: #247bd4;
+  content: '';
+  pointer-events: none;
+}
+.page-card.drop-before::before {
+  left: -9px;
+}
+.page-card.drop-after::after {
+  right: -9px;
+}
+.page-drag-ghost {
+  position: fixed;
+  z-index: 1;
+  width: 220px;
+  max-width: calc(100vw - 16px);
+  padding: 12px;
+  border: 1px solid #6fa3df;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 5px 22px #19365b33;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.page-drag-ghost strong, .page-drag-ghost span {
+  display: block;
+}
+.page-drag-ghost span {
+  margin-top: 5px;
+  color: #53647b;
+  font-size: 12px;
+}
+#pages-dialog menu {
+  position: sticky;
+  bottom: -22px;
+  z-index: 1;
+  padding: 12px 0;
+  border-top: 1px solid #d6e0eb;
+  background: #fff;
+}
+@media (max-width: 480px) {
+  .page-card.drop-before::before, .page-card.drop-after::after {
+    right: 0;
+    left: 0;
+    width: auto;
+    height: 4px;
+  }
+  .page-card.drop-before::before { top: -9px; bottom: auto; }
+  .page-card.drop-after::after { top: auto; bottom: -9px; }
+  #pages-dialog menu { bottom: -16px; }
+}
 @media (max-width: 1050px) {
   .workspace { padding: 12px; }
   .has-inspector > .inspector #property-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; align-items: start; }

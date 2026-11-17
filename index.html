@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Unifilari ATS</title>
-    <link rel="stylesheet" href="styles.css?v=20261115-1" />
+    <link rel="stylesheet" href="styles.css?v=20261117-1" />
   </head>
   <body>
     <header class="topbar">
@@ -190,7 +190,10 @@
       <form method="dialog"><h2>Controlli del progetto</h2><p class="help">Gli errori bloccano salvataggio e stampa. Gli avvisi aiutano a completare lo schema.</p><div id="issues-list"></div><menu><button class="button primary" value="close">Chiudi</button></menu></form>
     </dialog>
     <dialog id="pages-dialog">
-      <form method="dialog"><h2>Pagine del progetto</h2><p class="help">Riconosci le pagine dal disegno, assegna un nome e apri quella che ti serve.</p><div id="page-cards" class="page-cards"></div><menu><button type="button" class="button" id="overview-add-page">Aggiungi pagina</button><button class="button primary" value="close">Chiudi</button></menu></form>
+      <form method="dialog"><h2>Pagine del progetto</h2><p class="help">Trascina la maniglia per cambiare ordine, usa Prima / Dopo oppure scegli una posizione. Numeri e riferimenti si aggiornano automaticamente.</p><p id="page-order-message" class="page-order-message" role="status"></p><div id="page-cards" class="page-cards"></div><menu><button type="button" class="button" id="pages-undo" disabled>↶ Annulla</button><button type="button" class="button" id="pages-redo" disabled>↷ Ripristina</button><button type="button" class="button" id="overview-add-page">Aggiungi pagina</button><button class="button primary" value="close">Chiudi</button></menu></form>
+    </dialog>
+    <dialog id="page-position-dialog">
+      <form id="page-position-form"><h2>Sposta pagina</h2><p id="page-position-description" class="help"></p><label>Nuova posizione<select id="page-position-choice"></select></label><menu><button type="button" class="button" id="cancel-page-position">Annulla</button><button type="submit" class="button primary" id="confirm-page-position" disabled>Sposta</button></menu></form>
     </dialog>
     <dialog id="temporary-panel-dialog">
       <form method="dialog">
@@ -334,8 +337,8 @@
         <menu><button type="button" id="cancel-project">Annulla</button><button type="submit" class="button primary" id="confirm-project">Salva</button></menu>
       </form>
     </dialog>
-    <script src="core.js?v=20261115-1"></script>
-    <script src="viewport.js?v=20261115-1"></script>
-    <script src="app.js?v=20261115-1"></script>
+    <script src="core.js?v=20261117-1"></script>
+    <script src="viewport.js?v=20261117-1"></script>
+    <script src="app.js?v=20261117-1"></script>
   </body>
 </html>

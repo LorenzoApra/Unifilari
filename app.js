@@ -75,6 +75,9 @@ let projectLocationController = null;
 const projectLocationCache = new Map();
 let companyBook = [];
 let canvasViewport = null;
+let pageDrag = null;
+let pagePositionSource = null;
+let pageHandleClickUntil = 0;
 
 function serializableProject() {
   return Core.serializeProject(state);
@@ -82,9 +85,9 @@ function serializableProject() {
 function historySnapshot() {
   return JSON.stringify({ project: serializableProject(), currentPage: state.currentPage });
 }
-function checkpoint(key = 'command') {
+function checkpoint(key = 'command', coalesce = true) {
   const now = Date.now();
-  if (key === lastHistoryKey && now - lastHistoryAt < 450) return;
+  if (coalesce && key === lastHistoryKey && now - lastHistoryAt < 450) return;
   const snapshot = historySnapshot();
   if (historyPast.at(-1) !== snapshot) historyPast.push(snapshot);
   if (historyPast.length > HISTORY_LIMIT) historyPast.shift();
@@ -109,6 +112,7 @@ function undo() {
   historyFuture.push(historySnapshot());
   restoreHistorySnapshot(snapshot);
   markChanged('Modifica annullata.');
+  if ($('#pages-dialog').open) $('#page-order-message').textContent = 'Modifica annullata.';
 }
 function redo() {
   const snapshot = historyFuture.pop();
@@ -116,12 +120,15 @@ function redo() {
   historyPast.push(historySnapshot());
   restoreHistorySnapshot(snapshot);
   markChanged('Modifica ripristinata.');
+  if ($('#pages-dialog').open) $('#page-order-message').textContent = 'Modifica ripristinata.';
 }
 function updateDirtyUi() {
   const saveState = $('#save-state');
   if (saveState) saveState.textContent = dirty ? 'Modifiche non salvate' : state.meta.name ? 'Salvato' : 'Nessuna modifica';
   if ($('#undo-action')) $('#undo-action').disabled = historyPast.length === 0;
   if ($('#redo-action')) $('#redo-action').disabled = historyFuture.length === 0;
+  if ($('#pages-undo')) $('#pages-undo').disabled = historyPast.length === 0;
+  if ($('#pages-redo')) $('#pages-redo').disabled = historyFuture.length === 0;
 }
 function flushAutosave() {
   clearTimeout(autosaveTimer);
@@ -265,10 +272,139 @@ function pageThumbnail(page) {
 }
 function renderPageOverview() {
   if (!$('#pages-dialog').open) return;
-  $('#page-cards').innerHTML = sortedPages().map((page) => {
+  const pages = sortedPages();
+  $('#page-cards').innerHTML = pages.map((page, index) => {
     const nodes = state.nodes.filter((node) => node.page === page), loads = nodes.filter((node) => node.type === 'load').length;
-    return `<article class="page-card ${page === state.currentPage ? 'current' : ''}"><button type="button" class="page-preview-button" data-open-page="${page}" aria-label="Apri ${esc(pageLabel(page))}">${pageThumbnail(page)}<strong>${esc(pageLabel(page))}</strong><span>${loads} utenze · ${nodes.length} elementi</span></button><label>Nome pagina ${page}<input data-page-name="${page}" value="${esc(state.pageNames?.[page] || '')}" placeholder="Es. Palco, Regia, Esterni" maxlength="80" /></label></article>`;
+    return `<article class="page-card ${page === state.currentPage ? 'current' : ''}" data-page="${page}"><div class="page-order-controls"><button type="button" class="page-drag-handle" data-page-drag="${page}" aria-label="Sposta ${esc(pageLabel(page))}" title="Trascina per riordinare oppure premi Invio per scegliere la posizione" ${pages.length < 2 ? 'disabled' : ''}><span aria-hidden="true">⠿</span></button><button type="button" data-page-step="${page}" data-direction="-1" aria-label="Sposta ${esc(pageLabel(page))} prima" ${index === 0 ? 'disabled' : ''}>← Prima</button><button type="button" data-page-step="${page}" data-direction="1" aria-label="Sposta ${esc(pageLabel(page))} dopo" ${index === pages.length - 1 ? 'disabled' : ''}>Dopo →</button></div><button type="button" class="page-preview-button" data-open-page="${page}" aria-label="Apri ${esc(pageLabel(page))}">${pageThumbnail(page)}<strong>${esc(pageLabel(page))}</strong><span>${loads} utenze · ${nodes.length} elementi</span></button><label>Nome pagina ${page}<input data-page-name="${page}" value="${esc(state.pageNames?.[page] || '')}" placeholder="Es. Palco, Regia, Esterni" maxlength="80" /></label><button type="button" class="page-position-button" data-page-position="${page}" ${pages.length < 2 ? 'disabled' : ''}>Sposta in posizione…</button></article>`;
   }).join('');
+}
+function movePage(source, position, focusDirection = null) {
+  const result = Core.reorderPages(state, source, position);
+  if (!result.ok || !result.changed) return;
+  const label = state.pageNames?.[source] || `Pagina ${source}`;
+  checkpoint('reorder-page', false);
+  state = result.project;
+  const message = `${label} spostata dalla pagina ${source} alla ${position}.`;
+  markChanged(message); render();
+  $('#page-order-message').textContent = message;
+  const card = $(`#page-cards [data-page="${position}"]`);
+  const step = focusDirection === null ? null : card?.querySelector(`[data-direction="${focusDirection}"]:not(:disabled)`);
+  const button = step || card?.querySelector('[data-page-drag]');
+  button?.focus({ preventScroll: true });
+  card?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+function openPagePositionDialog(page) {
+  const pages = sortedPages();
+  if (!pages.includes(page) || pages.length < 2) return;
+  pagePositionSource = page;
+  $('#page-position-description').textContent = `Scegli la nuova posizione di ${pageLabel(page)}.`;
+  $('#page-position-choice').innerHTML = pages.map((_, index) => `<option value="${index + 1}" ${index + 1 === page ? 'selected' : ''}>Posizione ${index + 1}</option>`).join('');
+  $('#confirm-page-position').disabled = true;
+  $('#page-position-dialog').showModal();
+}
+function clearPageDropMarker() {
+  $('#page-cards').querySelectorAll('.drop-before, .drop-after').forEach((card) => card.classList.remove('drop-before', 'drop-after'));
+}
+function updatePageDropTarget() {
+  const drag = pageDrag;
+  if (!drag?.active) return;
+  const dialog = $('#pages-dialog'), bounds = dialog.getBoundingClientRect();
+  clearPageDropMarker();
+  drag.position = null;
+  const inside = drag.x >= bounds.left && drag.x <= bounds.right && drag.y >= bounds.top && drag.y <= bounds.bottom;
+  if (inside) {
+    const cards = [...$('#page-cards').children];
+    const distance = (card) => {
+      const r = card.getBoundingClientRect();
+      return Math.max(r.left - drag.x, 0, drag.x - r.right) ** 2 + Math.max(r.top - drag.y, 0, drag.y - r.bottom) ** 2;
+    };
+    const target = cards.reduce((best, card) => !best || distance(card) < distance(best) ? card : best, null);
+    if (target) {
+      const rect = target.getBoundingClientRect();
+      const columns = getComputedStyle($('#page-cards')).gridTemplateColumns.split(' ').length;
+      const after = columns === 1 ? drag.y > rect.top + rect.height / 2 : drag.x > rect.left + rect.width / 2;
+      const slot = cards.indexOf(target) + Number(after), sourceIndex = sortedPages().indexOf(drag.source);
+      drag.position = (slot > sourceIndex ? slot - 1 : slot) + 1;
+      if (drag.position !== sourceIndex + 1) target.classList.add(after ? 'drop-after' : 'drop-before');
+    }
+  }
+  drag.ghost.style.left = `${Math.max(8, Math.min(drag.x + 14, window.innerWidth - drag.ghost.offsetWidth - 8))}px`;
+  drag.ghost.style.top = `${Math.max(8, Math.min(drag.y + 14, window.innerHeight - drag.ghost.offsetHeight - 8))}px`;
+  const message = drag.position ? `Sposta in posizione ${drag.position} di ${sortedPages().length}` : 'Rilascia fuori dalla finestra per annullare';
+  drag.ghost.querySelector('span').textContent = message;
+  if (drag.lastMessage !== message) { $('#page-order-message').textContent = message; drag.lastMessage = message; }
+}
+function finishPageDrag(cancelled = false) {
+  const drag = pageDrag;
+  if (!drag) return;
+  pageDrag = null;
+  cancelAnimationFrame(drag.frame);
+  window.removeEventListener('pointermove', drag.move);
+  window.removeEventListener('pointerup', drag.up);
+  window.removeEventListener('pointercancel', drag.cancel);
+  window.removeEventListener('blur', drag.cancel);
+  const cards = $('#page-cards');
+  cards.removeEventListener('lostpointercapture', drag.cancel);
+  if (cards.hasPointerCapture(drag.pointerId)) cards.releasePointerCapture(drag.pointerId);
+  cards.classList.remove('is-reordering');
+  cards.querySelector('.is-dragging')?.classList.remove('is-dragging');
+  clearPageDropMarker();
+  drag.ghost?.remove();
+  pageHandleClickUntil = Date.now() + 350;
+  if (!cancelled && drag.active && drag.position) movePage(drag.source, drag.position);
+  else if (!cancelled && !drag.active) openPagePositionDialog(drag.source);
+  if (cancelled || (drag.active && (!drag.position || drag.position === drag.source))) {
+    $('#page-order-message').textContent = 'Spostamento annullato.';
+    cards.querySelector(`[data-page-drag="${drag.source}"]`)?.focus({ preventScroll: true });
+  }
+}
+function startPageDrag(event) {
+  const handle = event.target.closest('[data-page-drag]');
+  if (!handle || handle.disabled || event.button !== 0 || !event.isPrimary || pageDrag) return;
+  event.preventDefault();
+  const source = Number(handle.dataset.pageDrag);
+  // Completa prima un eventuale nome ancora in modifica: il cambio ridisegna le schede.
+  document.activeElement?.blur();
+  const cards = $('#page-cards');
+  cards.querySelector(`[data-page-drag="${source}"]`)?.focus({ preventScroll: true });
+  const drag = { source, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, active: false, frame: null };
+  pageDrag = drag;
+  drag.move = (next) => {
+    if (next.pointerId !== drag.pointerId) return;
+    drag.x = next.clientX; drag.y = next.clientY;
+    if (!drag.active && Math.hypot(drag.x - drag.startX, drag.y - drag.startY) >= 5) {
+      drag.active = true;
+      cards.classList.add('is-reordering');
+      cards.querySelector(`[data-page="${source}"]`).classList.add('is-dragging');
+      drag.ghost = document.createElement('div');
+      drag.ghost.className = 'page-drag-ghost'; drag.ghost.setAttribute('aria-hidden', 'true');
+      drag.ghost.innerHTML = `<strong>${esc(pageLabel(source))}</strong><span></span>`;
+      $('#pages-dialog').append(drag.ghost);
+      drag.frame = requestAnimationFrame(scroll);
+    }
+    if (drag.active) { next.preventDefault(); updatePageDropTarget(); }
+  };
+  drag.up = (next) => {
+    if (next.pointerId !== drag.pointerId) return;
+    if (drag.active) { drag.x = next.clientX; drag.y = next.clientY; updatePageDropTarget(); }
+    finishPageDrag();
+  };
+  drag.cancel = (next) => { if (next.pointerId === undefined || next.pointerId === drag.pointerId) finishPageDrag(true); };
+  function scroll() {
+    if (pageDrag !== drag || !drag.active) return;
+    const dialog = $('#pages-dialog'), rect = dialog.getBoundingClientRect();
+    if (drag.x >= rect.left && drag.x <= rect.right) {
+      const speed = drag.y < rect.top + 48 ? -Math.min(18, (rect.top + 48 - drag.y) / 3) : drag.y > rect.bottom - 48 ? Math.min(18, (drag.y - rect.bottom + 48) / 3) : 0;
+      if (speed) { dialog.scrollTop += speed; updatePageDropTarget(); }
+    }
+    drag.frame = requestAnimationFrame(scroll);
+  }
+  cards.setPointerCapture(drag.pointerId);
+  cards.addEventListener('lostpointercapture', drag.cancel);
+  window.addEventListener('pointermove', drag.move, { passive: false });
+  window.addEventListener('pointerup', drag.up);
+  window.addEventListener('pointercancel', drag.cancel);
+  window.addEventListener('blur', drag.cancel);
 }
 function renamePage(page, value) {
   const name = value.trim().slice(0, 80);
@@ -276,7 +412,15 @@ function renamePage(page, value) {
   checkpoint(`rename-page-${page}`);
   state.pageNames ||= {};
   if (name) state.pageNames[page] = name; else delete state.pageNames[page];
-  markChanged('Nome pagina aggiornato.'); render();
+  markChanged('Nome pagina aggiornato.'); render(true);
+  const card = $(`#page-cards [data-page="${page}"]`);
+  if (card) {
+    card.querySelector('.page-preview-button strong').textContent = pageLabel(page);
+    card.querySelector('[data-open-page]').setAttribute('aria-label', `Apri ${pageLabel(page)}`);
+    card.querySelector('[data-page-drag]').setAttribute('aria-label', `Sposta ${pageLabel(page)}`);
+    card.querySelectorAll('[data-page-step]').forEach((button) => button.setAttribute('aria-label', `Sposta ${pageLabel(page)} ${button.dataset.direction === '-1' ? 'prima' : 'dopo'}`));
+    card.querySelector('[data-page-name]').value = name;
+  }
 }
 function closeMobileSidebar() {
   if (window.matchMedia('(max-width: 760px)').matches) togglePanel($('.sidebar'), $('#toggle-sidebar'), false);
@@ -530,7 +674,7 @@ function showUnconnectedLoads() {
   showStatus(`${ids.length === 1 ? '1 utenza non collegata' : `${ids.length} utenze non collegate`} nel progetto. ${selectedIds.length === 1 ? 'Selezionata' : 'Selezionate'} nella pagina ${targetPage}.`);
 }
 
-function render() {
+function render(keepPageCards = false) {
   if (renderFrame !== null) { cancelAnimationFrame(renderFrame); renderFrame = null; }
   const pages = sortedPages(), maxPages = pagesCount();
   if (!pages.includes(state.currentPage)) state.currentPage = pages[0] || 1;
@@ -594,7 +738,7 @@ function render() {
   renderWorkflowGuide();
   renderSelectionToolbar();
   renderDiagnostics();
-  renderPageOverview();
+  if (!keepPageCards) renderPageOverview();
   canvasViewport?.refresh();
   updateDirtyUi();
 }
@@ -1726,11 +1870,44 @@ function bind() {
   };
   $('#show-issues').onclick = () => { $('#issues-dialog').showModal(); renderDiagnostics(); };
   $('#issues-list').onclick = (event) => { const button = event.target.closest('[data-issue-index]'); if (button) goToIssue(Number(button.dataset.issueIndex)); };
-  $('#manage-pages').onclick = () => { $('#pages-dialog').showModal(); renderPageOverview(); };
+  $('#manage-pages').onclick = () => { $('#page-order-message').textContent = ''; $('#pages-dialog').showModal(); renderPageOverview(); updateDirtyUi(); };
   $('#page-cards').onclick = (event) => {
+    const step = event.target.closest('[data-page-step]');
+    if (step && !step.disabled) {
+      const source = Number(step.dataset.pageStep), direction = Number(step.dataset.direction);
+      movePage(source, sortedPages().indexOf(source) + 1 + direction, direction); return;
+    }
+    const position = event.target.closest('[data-page-position]');
+    if (position && !position.disabled) { openPagePositionDialog(Number(position.dataset.pagePosition)); return; }
+    const handle = event.target.closest('[data-page-drag]');
+    if (handle) {
+      if (!handle.disabled && event.detail === 0 && Date.now() > pageHandleClickUntil) openPagePositionDialog(Number(handle.dataset.pageDrag));
+      return;
+    }
     const button = event.target.closest('[data-open-page]');
     if (button) { $('#pages-dialog').close(); goToPage(Number(button.dataset.openPage)); }
   };
+  $('#page-cards').addEventListener('pointerdown', startPageDrag);
+  $('#pages-dialog').addEventListener('cancel', (event) => { if (pageDrag) { event.preventDefault(); finishPageDrag(true); } });
+  $('#pages-dialog').addEventListener('close', () => finishPageDrag(true));
+  $('#pages-dialog').addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && pageDrag) { event.preventDefault(); event.stopPropagation(); finishPageDrag(true); return; }
+    const editable = ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName) || event.target.isContentEditable;
+    if (!editable && (event.metaKey || event.ctrlKey) && ['z', 'y'].includes(event.key.toLowerCase())) {
+      event.preventDefault();
+      if (event.key.toLowerCase() === 'y' || event.shiftKey) redo(); else undo();
+    }
+  });
+  $('#pages-undo').onclick = undo;
+  $('#pages-redo').onclick = redo;
+  $('#page-position-choice').onchange = (event) => { $('#confirm-page-position').disabled = Number(event.target.value) === pagePositionSource; };
+  $('#page-position-form').onsubmit = (event) => {
+    event.preventDefault();
+    if ($('#confirm-page-position').disabled) return;
+    const source = pagePositionSource, position = Number($('#page-position-choice').value);
+    $('#page-position-dialog').close(); movePage(source, position);
+  };
+  $('#cancel-page-position').onclick = () => $('#page-position-dialog').close();
   $('#page-cards').addEventListener('change', (event) => { if (event.target.dataset.pageName) renamePage(Number(event.target.dataset.pageName), event.target.value); });
   $('#page-cards').addEventListener('keydown', (event) => { if (event.key === 'Enter' && event.target.dataset.pageName) { event.preventDefault(); event.target.blur(); } });
   $('#overview-add-page').onclick = () => { createPageAfter(state.currentPage, true); renderPageOverview(); };
